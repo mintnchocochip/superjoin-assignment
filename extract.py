@@ -12,6 +12,7 @@ separate step that writes to a separate table. See label.py.
 
 import hashlib
 import re
+from collections import deque
 
 import pymupdf
 
@@ -47,6 +48,17 @@ IDENTIFIER = re.compile(
 )
 
 LABEL = re.compile(r"[A-Za-z]{3,}(?:\s+\S+){1,}")
+
+# The heading that states which financial statement the rows below belong to.
+# This is where the consolidation basis is written down, so it has to survive
+# into the evidence as quotable text.
+STATEMENT = re.compile(
+    r"\b(consolidated|standalone)\b[^.]{0,60}?"
+    r"\b(statement|balance\s*sheet|cash\s*flow|financial\s*statements?)\b"
+    r"|\bstatement\s+of\s+(profit\s+and\s+loss|changes\s+in\s+equity|cash\s*flows?)\b"
+    r"|\bbalance\s*sheet\s+as\s+at\b",
+    re.IGNORECASE,
+)
 
 
 def evidence_id(doc_id, pdf_page, row_no, start, end, text):
@@ -142,6 +154,9 @@ def mine(pdf_path, doc_id):
             rows = list(_bands(page))
             printed = _printed_page(rows)
             row_label, headers = None, []
+            # The statement heading a row sits under. It is what states the
+            # consolidation basis, so it has to reach the labeller as quotable text.
+            section, context = None, deque(maxlen=3)
 
             for row_no, cells in enumerate(rows):
                 # Join once, recording where each cell landed, so a repeated value
@@ -154,6 +169,13 @@ def mine(pdf_path, doc_id):
                 text = " ".join(parts)
                 if not text.strip():
                     continue
+
+                # Only a line that names a statement becomes the section. A general
+                # "short line without numbers" heuristic just latches onto the last
+                # sentence of body prose, and this line's job is to carry the
+                # consolidation basis as text the labeller can quote.
+                if STATEMENT.search(text):
+                    section = text.strip()
 
                 # A row of period names is the column header for the rows below it.
                 labelled = [c for c in cells if PERIOD_CELL.search(c[2])]
@@ -181,6 +203,8 @@ def mine(pdf_path, doc_id):
                             "printed_page": printed,
                             "text": text,
                             "row_label": row_label,
+                            "section": section,
+                            "context": "\n".join(context),
                             "col_header": _header_for(cell, headers),
                             "value": match.group("value"),
                             "currency": (match.group("currency") or "").strip(),
@@ -201,6 +225,8 @@ def mine(pdf_path, doc_id):
                         "printed_page": printed,
                         "text": text,
                         "row_label": None,
+                        "section": section,
+                        "context": "\n".join(context),
                         "col_header": None,
                         "value": None,
                         "currency": "",
@@ -210,6 +236,8 @@ def mine(pdf_path, doc_id):
                         "accepted": True,
                         "reject_reason": None,
                     }
+
+                context.append(text.strip())
     finally:
         doc.close()
 

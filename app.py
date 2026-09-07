@@ -34,6 +34,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS documents (
     id           TEXT PRIMARY KEY,
     filename     TEXT NOT NULL,
+    subject      TEXT NOT NULL,
     sha256       TEXT NOT NULL UNIQUE,
     page_count   INTEGER NOT NULL,
     uploaded_at  TEXT NOT NULL
@@ -46,6 +47,8 @@ CREATE TABLE IF NOT EXISTS evidence (
     printed_page  TEXT,
     text          TEXT NOT NULL,
     row_label     TEXT,
+    section       TEXT,
+    context       TEXT,
     col_header    TEXT,
     value         TEXT,
     currency      TEXT,
@@ -57,26 +60,44 @@ CREATE TABLE IF NOT EXISTS evidence (
 );
 CREATE INDEX IF NOT EXISTS ix_evidence_doc ON evidence(doc_id, accepted, kind);
 CREATE TABLE IF NOT EXISTS claims (
-    id           TEXT PRIMARY KEY,
-    evidence_id  TEXT NOT NULL REFERENCES evidence(id),
-    is_fact      INTEGER NOT NULL,
-    subject      TEXT,
-    metric       TEXT,
-    period       TEXT,
-    basis        TEXT,
-    model        TEXT NOT NULL,
-    labelled_at  TEXT NOT NULL
+    id              TEXT PRIMARY KEY,
+    evidence_id     TEXT NOT NULL REFERENCES evidence(id),
+    is_fact         INTEGER NOT NULL,
+    subject         TEXT,
+    metric          TEXT,
+    metric_evidence TEXT,
+    period          TEXT,
+    basis           TEXT,
+    basis_evidence  TEXT,
+    vintage         TEXT,
+    scope           TEXT,
+    unit            TEXT,
+    confidence      REAL,
+    model           TEXT NOT NULL,
+    labelled_at     TEXT NOT NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS ux_claims_evidence ON claims(evidence_id);
 """
 
 INSERT_EVIDENCE = (
     "INSERT OR IGNORE INTO evidence (id, doc_id, kind, pdf_page, printed_page, text,"
-    " row_label, col_header, value, currency, unit, char_start, char_end, accepted,"
-    " reject_reason) VALUES (:id, :doc_id, :kind, :pdf_page, :printed_page, :text,"
-    " :row_label, :col_header, :value, :currency, :unit, :char_start, :char_end,"
-    " :accepted, :reject_reason)"
+    " row_label, section, context, col_header, value, currency, unit, char_start,"
+    " char_end, accepted, reject_reason)"
+    " VALUES (:id, :doc_id, :kind, :pdf_page, :printed_page, :text, :row_label,"
+    " :section, :context, :col_header, :value, :currency, :unit, :char_start,"
+    " :char_end, :accepted, :reject_reason)"
 )
+
+def subject_of(filename):
+    """The entity a document is about. Given to the labeller, never inferred by it.
+
+    ponytail: filename stem. Replace with a cover-page read when a document turns
+    up whose name says nothing useful.
+    """
+    stem = pathlib.Path(filename).stem.replace("_", "-").lower()
+    words = [w for w in stem.split("-") if not w.isdigit()]
+    return " ".join(words[:3]) or stem
+
 
 app = FastAPI(title="Fact Knowledge Layer")
 
@@ -131,10 +152,11 @@ async def upload(file: UploadFile = File(...)):
 
     with db() as conn:
         conn.execute(
-            "INSERT INTO documents VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO documents VALUES (?, ?, ?, ?, ?, ?)",
             (
                 doc_id,
                 file.filename,
+                subject_of(file.filename),
                 digest,
                 pages,
                 datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -156,7 +178,8 @@ def _label_batch(doc_id, limit):
         rows = [
             dict(r)
             for r in conn.execute(
-                "SELECT e.* FROM evidence e"
+                "SELECT e.*, d.subject FROM evidence e"
+                " JOIN documents d ON d.id = e.doc_id"
                 " LEFT JOIN claims c ON c.evidence_id = e.id"
                 " WHERE e.doc_id = ? AND e.accepted = 1 AND c.id IS NULL"
                 " ORDER BY e.pdf_page LIMIT ?",
@@ -166,13 +189,18 @@ def _label_batch(doc_id, limit):
     if not rows:
         return 0
 
-    # What a number is *about* depends on its row label, not on its value or its
-    # column - period is derived from the header deterministically. So one call
-    # per distinct label covers every figure in that row across every column,
-    # which is roughly a third of the calls. Text excerpts are each unique.
+    # Every figure on one printed row shares a section, a label and a source line,
+    # and differs only by column - which decides period, and period is derived
+    # deterministically. So one call answers the whole row. Keying on the source
+    # line rather than the label alone costs some reuse and buys correctness: the
+    # same label under two different statements is two different questions.
     groups = {}
     for row in rows:
-        key = ("number", row["row_label"]) if row["kind"] == "number" else ("text", row["id"])
+        key = (
+            ("number", row["section"], row["row_label"], row["text"])
+            if row["kind"] == "number"
+            else ("text", row["id"])
+        )
         groups.setdefault(key, []).append(row)
 
     with ThreadPoolExecutor(max_workers=WORKERS) as pool:
@@ -189,7 +217,7 @@ def _label_batch(doc_id, limit):
                     out,
                     id=uuid.uuid4().hex[:16],
                     evidence_id=row["id"],
-                    period=labeller.period_from(row["col_header"]) or "",
+                    period=labeller.period_from(row["col_header"]) or out["period"],
                     labelled_at=now,
                 )
             )
@@ -197,8 +225,10 @@ def _label_batch(doc_id, limit):
     with db() as conn:
         conn.executemany(
             "INSERT OR REPLACE INTO claims (id, evidence_id, is_fact, subject, metric,"
-            " period, basis, model, labelled_at) VALUES (:id, :evidence_id, :is_fact,"
-            " :subject, :metric, :period, :basis, :model, :labelled_at)",
+            " metric_evidence, period, basis, basis_evidence, vintage, scope, unit,"
+            " confidence, model, labelled_at) VALUES (:id, :evidence_id, :is_fact,"
+            " :subject, :metric, :metric_evidence, :period, :basis, :basis_evidence,"
+            " :vintage, :scope, :unit, :confidence, :model, :labelled_at)",
             claims,
         )
     return len(claims)
@@ -243,7 +273,8 @@ def evidence(
     limit: int = 300,
 ):
     sql = (
-        "SELECT e.*, c.subject, c.metric, c.period, c.basis, c.is_fact, c.model"
+        "SELECT e.*, c.subject, c.metric, c.metric_evidence, c.period, c.basis,"
+        " c.basis_evidence, c.vintage, c.scope, c.confidence, c.is_fact, c.model"
         " FROM evidence e LEFT JOIN claims c ON c.evidence_id = e.id"
         " WHERE e.doc_id = ? AND e.accepted = ?"
     )

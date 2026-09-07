@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/tools/export_transcript.py\" > /dev/null"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -73,7 +73,22 @@
     font-family: ui-sans-serif, system-ui, sans-serif; color: var(--muted);
     border-right: 2px solid var(--line); padding-right: 7px; margin-right: 5px;
   }
-  .lbl::before { content: "↳ row: "; opacity: .65; }
+  .lbl::before { content: "row: "; opacity: .65; }
+  .metric { font-weight: 600; display: block; }
+  .qual { color: var(--muted); font-size: 12px; }
+  .qual b { font-weight: 600; color: var(--accent); }
+  .none { color: var(--muted); font-style: italic; font-size: 12.5px; }
+  .no { opacity: .45; }
+  #label {
+    width: 100%; margin-top: 14px; padding: 8px; border-radius: 6px; cursor: pointer;
+    background: var(--accent); color: #fff; border: 0; font: inherit; font-weight: 600;
+  }
+  #label:disabled { opacity: .4; cursor: default; }
+  #lstat { color: var(--muted); font-size: 12px; margin-top: 6px; min-height: 16px; }
+  select {
+    background: var(--panel); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 6px; padding: 6px 8px; font: inherit; font-size: 13px;
+  }
   .empty { color: var(--muted); padding: 32px 8px; text-align: center; }
   .wrap { overflow-x: auto; }
   h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 20px 0 4px; }
@@ -82,7 +97,7 @@
 <body>
 <header>
   <h1>Fact Knowledge Layer</h1>
-  <span id="phase">evidence mining &mdash; regex only, no model in the loop yet</span>
+  <span id="phase"></span>
 </header>
 
 <main>
@@ -91,17 +106,25 @@
     <input type="file" id="file" accept="application/pdf" hidden>
     <h2>Documents</h2>
     <div id="docs"></div>
+    <button id="label" disabled>Label with model</button>
+    <div id="lstat"></div>
   </aside>
 
   <section>
     <div class="controls">
       <input type="text" id="q" placeholder="Filter evidence lines…">
       <input type="number" id="page" placeholder="Page" min="0">
-      <label class="chk"><input type="checkbox" id="rej"> show rejected</label>
+      <label class="chk"><input type="checkbox" id="rej"> rejected</label>
+      <label class="chk"><input type="checkbox" id="only"> facts only</label>
+      <select id="kind">
+        <option value="">all evidence</option>
+        <option value="number">numbers</option>
+        <option value="text">text</option>
+      </select>
       <span id="count" style="color:var(--muted);font-size:12.5px"></span>
     </div>
     <div class="wrap"><table>
-      <thead><tr><th>PDF pg</th><th>Printed</th><th>Value</th><th>Evidence</th></tr></thead>
+      <thead><tr><th>PDF pg</th><th>Value</th><th>Label &middot; model</th><th>Evidence &middot; document</th></tr></thead>
       <tbody id="rows"></tbody>
     </table></div>
     <div id="empty" class="empty">Upload a PDF to see the evidence mined from it.</div>
@@ -115,9 +138,9 @@ let current = null;
 const esc = s => s.replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 
 function highlight(row) {
-  const { line, char_start: a, char_end: b } = row;
-  if (a == null || b == null || a < 0 || b > line.length || a >= b) return esc(line);
-  return esc(line.slice(0, a)) + '<mark>' + esc(line.slice(a, b)) + '</mark>' + esc(line.slice(b));
+  const { text, char_start: a, char_end: b } = row;
+  if (a == null || b == null || a < 0 || b > text.length || a >= b) return esc(text);
+  return esc(text.slice(0, a)) + '<mark>' + esc(text.slice(a, b)) + '</mark>' + esc(text.slice(b));
 }
 
 async function loadDocs() {
@@ -125,11 +148,12 @@ async function loadDocs() {
   $('#docs').innerHTML = docs.map(d => `
     <div class="doc ${d.id === current ? 'on' : ''}" data-id="${d.id}">
       <b>${esc(d.filename)}</b>
-      <small>${d.page_count} pages · ${d.accepted} facts · ${d.rejected} rejected</small>
+      <small>${d.page_count}p · ${d.accepted} evidence · ${d.labelled} labelled · ${d.facts} facts</small>
     </div>`).join('') || '<div class="empty" style="padding:12px 0">None yet</div>';
 
   document.querySelectorAll('.doc').forEach(el =>
     el.onclick = () => { current = el.dataset.id; loadDocs(); loadRows(); });
+  $('#label').disabled = !current;
 }
 
 async function loadRows() {
@@ -137,22 +161,30 @@ async function loadRows() {
   const p = new URLSearchParams({
     accepted: $('#rej').checked ? 0 : 1,
     q: $('#q').value.trim(),
+    kind: $('#kind').value,
+    labelled: $('#only').checked ? 1 : -1,
     page: $('#page').value === '' ? -1 : $('#page').value,
   });
-  const rows = await (await fetch(`/api/documents/${current}/candidates?${p}`)).json();
+  const rows = await (await fetch(`/api/documents/${current}/evidence?${p}`)).json();
 
   $('#empty').style.display = rows.length ? 'none' : 'block';
   $('#empty').textContent = rows.length ? '' : 'Nothing matches those filters.';
   $('#count').textContent = rows.length ? `${rows.length} shown` : '';
 
-  $('#rows').innerHTML = rows.map(r => `
-    <tr>
-      <td class="pg">${r.pdf_page}</td>
-      <td class="pg">${r.printed_page ?? '—'}</td>
-      <td class="val">${esc([r.currency, r.value, r.unit].filter(Boolean).join(' '))}</td>
-      <td class="ev">${r.label ? `<span class="lbl">${esc(r.label)}</span> ` : ''}${highlight(r)}${
+  $('#rows').innerHTML = rows.map(r => {
+    const qual = [r.period, r.basis].filter(Boolean).map(x => `<b>${esc(x)}</b>`).join(' · ');
+    const label = r.model
+      ? `<span class="metric">${esc(r.metric || '—')}</span>
+         <span class="qual">${esc(r.subject || '')}${qual ? ' · ' + qual : ''}</span>`
+      : '<span class="none">unlabelled</span>';
+    return `
+    <tr class="${r.model && !r.is_fact ? 'no' : ''}">
+      <td class="pg">${r.pdf_page}${r.printed_page ? `<br><small>p.${esc(r.printed_page)}</small>` : ''}</td>
+      <td class="val">${esc([r.currency, r.value, r.unit].filter(Boolean).join(' ')) || '—'}</td>
+      <td>${label}</td>
+      <td class="ev">${r.row_label ? `<span class="lbl">${esc(r.row_label)}</span> ` : ''}${highlight(r)}${
         r.reject_reason ? ` <span class="why">${esc(r.reject_reason)}</span>` : ''}</td>
-    </tr>`).join('');
+    </tr>`; }).join('');
 }
 
 async function upload(f) {
@@ -187,6 +219,29 @@ let t;
 $('#q').oninput = () => { clearTimeout(t); t = setTimeout(loadRows, 200); };
 $('#page').oninput = () => { clearTimeout(t); t = setTimeout(loadRows, 200); };
 $('#rej').onchange = loadRows;
+$('#kind').onchange = loadRows;
+$('#only').onchange = loadRows;
+
+$('#label').onclick = async () => {
+  $('#label').disabled = true;
+  const r = await (await fetch(`/api/documents/${current}/label`, { method: 'POST' })).json();
+  if (r.detail) { $('#lstat').textContent = r.detail; $('#label').disabled = false; return; }
+  $('#lstat').textContent = `labelling with ${r.model}…`;
+  const poll = setInterval(async () => {
+    await loadDocs();
+    const d = (await (await fetch('/api/documents')).json()).find(x => x.id === current);
+    $('#lstat').textContent = `${d.labelled} labelled · ${d.facts} facts`;
+    await loadRows();
+  }, 4000);
+  setTimeout(() => { clearInterval(poll); $('#label').disabled = false; }, 600000);
+};
+
+(async () => {
+  const m = await (await fetch('/api/models')).json();
+  $('#phase').textContent = m.available.includes(m.configured)
+    ? `evidence mining + labelling · ${m.configured}`
+    : `${m.configured} not pulled — run: ollama pull ${m.configured}`;
+})();
 
 loadDocs();
 </script>

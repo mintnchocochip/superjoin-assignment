@@ -21,7 +21,10 @@ ENV_FILE=../.env
 # compose only looks next to the compose file unless told otherwise.
 # ENCRYPTED=1 swaps the Community image for Percona Server for MongoDB, which
 # supports encryption at rest. See docker-compose.encrypted.yml.
-COMPOSE="docker compose --env-file $ENV_FILE -f docker-compose.yml"
+# A freshly installed Docker on Linux leaves the user outside the docker group
+# until they log out and back in. The runner detects that and sets DOCKER="sudo
+# docker" so the run continues instead of stopping for a re-login.
+COMPOSE="${DOCKER:-docker} compose --env-file $ENV_FILE -f docker-compose.yml"
 if [ "${ENCRYPTED:-0}" = "1" ]; then
   COMPOSE="$COMPOSE -f docker-compose.encrypted.yml"
 fi

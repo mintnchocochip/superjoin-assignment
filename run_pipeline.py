@@ -6,6 +6,13 @@ labelling is roughly forty seconds per model call and there are on the order of
 1,500 calls across the six starter documents, so it wants a real GPU and a few
 hours rather than a laptop and an afternoon.
 
+On Ubuntu this needs nothing but Python and sudo. It installs Docker Engine and
+Ollama from their official installers, pulls the model, and runs everything in a
+virtualenv it creates - so a system Python marked externally managed (PEP 668 on
+24.04) and a docker group that is not live until the next login, which are the
+two things that reliably derail a first run, are both handled rather than
+explained.
+
     python run_pipeline.py                 # everything, then write a dump
     python run_pipeline.py --yes           # same, no confirmation prompts
     python run_pipeline.py --limit 50      # cap model calls per document
@@ -47,28 +54,191 @@ def run(cmd, **kw):
     return subprocess.run(cmd, cwd=ROOT, **kw)
 
 
-# --- setup -----------------------------------------------------------------
+def quiet(cmd):
+    """True if the command succeeds. Used for probing, so output is discarded."""
+    return run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+
+
+def have(name):
+    return shutil.which(name) is not None
+
+
+LINUX = sys.platform.startswith("linux")
+DOCKER = ["docker"]  # becomes ["sudo", "docker"] when the group is not active yet
+
+
+# --- provisioning ----------------------------------------------------------
+
+def sudo_available():
+    return have("sudo") and LINUX
+
+
+def apt_install(*packages):
+    say(f"    apt-get install {' '.join(packages)}")
+    quiet(["sudo", "apt-get", "update", "-qq"])
+    return run(["sudo", "apt-get", "install", "-y", "-qq", *packages]).returncode == 0
+
+
+def ensure_venv():
+    """Re-execute inside .venv, creating it if needed.
+
+    Ubuntu 24.04 marks the system Python externally managed (PEP 668), so a plain
+    `pip install` into it fails with an error most people then work around by
+    force. A virtualenv sidesteps the question, and re-exec means the caller
+    still only ran one command.
+    """
+    if sys.prefix != sys.base_prefix:
+        return
+
+    venv = ROOT / ".venv"
+    python = venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    if not python.exists():
+        say("==> creating .venv")
+        if run([sys.executable, "-m", "venv", str(venv)]).returncode:
+            if LINUX and sudo_available():
+                version = f"python{sys.version_info.major}.{sys.version_info.minor}"
+                apt_install(f"{version}-venv", "python3-venv")
+                if run([sys.executable, "-m", "venv", str(venv)]).returncode:
+                    die("could not create a virtualenv",
+                        f"Try: sudo apt-get install -y {version}-venv")
+            else:
+                die("could not create a virtualenv",
+                    "Install the venv module for your Python, then re-run.")
+
+    say(f"==> re-running inside {python}")
+    os.execv(str(python), [str(python), __file__, *sys.argv[1:]])
+
 
 def install_dependencies():
     say("==> installing Python dependencies")
+    if run([sys.executable, "-m", "pip", "install", "-q", "--upgrade", "pip"]).returncode:
+        say("    (could not upgrade pip; continuing)")
     if run([sys.executable, "-m", "pip", "install", "-q", "-r", "requirements.txt"]).returncode:
         die("pip install failed")
+
+
+def install_docker():
+    """Install Docker Engine from Docker's own convenience script.
+
+    Only on Linux, and only when docker is genuinely absent. On macOS and
+    Windows, Docker Desktop is a GUI application that cannot sensibly be
+    installed from here, so those get an instruction instead.
+    """
+    if have("docker"):
+        return
+    if not LINUX:
+        die("Docker is not installed",
+            "Install Docker Desktop from docker.com, start it, then re-run.")
+    if not sudo_available():
+        die("Docker is not installed and sudo is unavailable",
+            "Install it with: curl -fsSL https://get.docker.com | sudo sh")
+
+    say("==> installing Docker Engine (get.docker.com, needs sudo)")
+    have_curl = have("curl") or apt_install("curl")
+    if not have_curl:
+        die("curl is unavailable and could not be installed")
+    script = ROOT / ".get-docker.sh"
+    try:
+        if run(["curl", "-fsSL", "-o", str(script), "https://get.docker.com"]).returncode:
+            die("could not download the Docker installer")
+        if run(["sudo", "sh", str(script)]).returncode:
+            die("the Docker installer failed")
+    finally:
+        script.unlink(missing_ok=True)
+
+
+def ensure_docker_running():
+    """Start the daemon, and work around a group membership that is not live yet.
+
+    `usermod -aG docker` does not affect the shell that ran it - the group only
+    applies after a new login. Rather than stop and ask for a logout, which is
+    exactly the tinkering this script exists to avoid, fall back to sudo for the
+    rest of the run.
+    """
+    global DOCKER
+
+    if LINUX and have("systemctl") and not quiet(["docker", "info"]):
+        say("==> starting the Docker daemon")
+        quiet(["sudo", "systemctl", "enable", "--now", "docker"])
+
+    if quiet(["docker", "info"]):
+        return
+    if LINUX and sudo_available() and quiet(["sudo", "docker", "info"]):
+        DOCKER = ["sudo", "docker"]
+        say("==> using sudo for docker (group membership needs a re-login)")
+        quiet(["sudo", "usermod", "-aG", "docker", os.environ.get("USER", "")])
+        return
+
+    die("the Docker daemon is not reachable",
+        "Start Docker Desktop, or on Linux: sudo systemctl start docker")
+
+
+def install_ollama():
+    if have("ollama"):
+        return
+    if not LINUX:
+        die("Ollama is not installed", "Install it from ollama.com, then re-run.")
+    if not sudo_available():
+        die("Ollama is not installed and sudo is unavailable",
+            "Install it with: curl -fsSL https://ollama.com/install.sh | sh")
+
+    say("==> installing Ollama (ollama.com/install.sh)")
+    if not (have("curl") or apt_install("curl")):
+        die("curl is unavailable and could not be installed")
+    script = ROOT / ".install-ollama.sh"
+    try:
+        if run(["curl", "-fsSL", "-o", str(script), "https://ollama.com/install.sh"]).returncode:
+            die("could not download the Ollama installer")
+        if run(["sh", str(script)]).returncode:
+            die("the Ollama installer failed")
+    finally:
+        script.unlink(missing_ok=True)
+
+
+def ensure_ollama_running():
+    """The Linux installer registers a systemd service; start it if it is idle."""
+    import label as labeller
+
+    if labeller.available():
+        return
+    if LINUX and have("systemctl"):
+        say("==> starting the Ollama service")
+        quiet(["sudo", "systemctl", "enable", "--now", "ollama"])
+    else:
+        say("==> starting ollama serve in the background")
+        subprocess.Popen(["ollama", "serve"], cwd=ROOT,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    for _ in range(30):
+        if labeller.available():
+            return
+        time.sleep(2)
+
+
+def provision(assume_yes):
+    """Install everything this needs. Asks first, because it touches the machine."""
+    missing = [name for name in ("docker", "ollama") if not have(name)]
+    if missing and not assume_yes:
+        say("\nThis will install, with sudo: " + ", ".join(missing))
+        say("  docker  <- https://get.docker.com")
+        say("  ollama  <- https://ollama.com/install.sh")
+        if input("Proceed? [Y/n] ").strip().lower() in ("n", "no"):
+            die("nothing installed", "Install those two yourself, then re-run with --skip-setup.")
+
+    install_docker()
+    ensure_docker_running()
+    install_ollama()
 
 
 def start_database():
     """Bring up the replica set. bootstrap.sh is idempotent, so this is cheap."""
     say("==> starting MongoDB replica set")
-    if not shutil.which("docker"):
-        die("docker is not installed", "Install Docker Desktop, then start it before re-running.")
-    if run(["docker", "info"], stdout=subprocess.DEVNULL,
-           stderr=subprocess.DEVNULL).returncode:
-        die("the Docker daemon is not running", "Start Docker Desktop, then re-run this script.")
-
     bash = shutil.which("bash")
     if not bash:
         die("bash is not available",
             "On Windows, run this from Git Bash. bootstrap.sh needs a POSIX shell.")
-    if run([bash, "deploy/bootstrap.sh"]).returncode:
+    env = dict(os.environ, DOCKER=" ".join(DOCKER))
+    if run([bash, "deploy/bootstrap.sh"], env=env).returncode:
         die("deploy/bootstrap.sh failed", "Its output above says why.")
 
 
@@ -88,13 +258,7 @@ def ensure_model():
     import label as labeller
 
     say(f"==> checking Ollama at {labeller.HOST}")
-    if labeller.MODEL not in labeller.available():
-        if not shutil.which("ollama"):
-            die(f"Ollama is not reachable at {labeller.HOST}",
-                "Install it from ollama.com, run `ollama serve`, then re-run.")
-        say(f"    pulling {labeller.MODEL} (a few GB, once)")
-        if run(["ollama", "pull", labeller.MODEL]).returncode:
-            die(f"could not pull {labeller.MODEL}")
+    ensure_ollama_running()
 
     if not labeller.available():
         die(f"Ollama is not answering at {labeller.HOST}",
@@ -102,6 +266,11 @@ def ensure_model():
             "fall inside a reserved range once Docker is running - if it refuses "
             "to bind, run `OLLAMA_HOST=127.0.0.1:12345 ollama serve` and put "
             "OLLAMA_HOST=127.0.0.1:12345 in .env.")
+
+    if labeller.MODEL not in labeller.available():
+        say(f"    pulling {labeller.MODEL} (a few GB, once)")
+        if run(["ollama", "pull", labeller.MODEL]).returncode:
+            die(f"could not pull {labeller.MODEL}")
 
     # Answering is not the same as being able to generate: a corrupt blob returns
     # HTTP 500 per request and would otherwise look like a very slow run.
@@ -249,11 +418,11 @@ def write_dump():
 
 def restore(archive):
     """Load a dump produced by write_dump. Replaces documents by _id."""
+    load_env()
     import store
     from bson import json_util
     from pymongo import ReplaceOne
 
-    load_env()
     store.ensure_indexes()
     say(f"==> restoring from {archive}")
     with zipfile.ZipFile(archive) as zf:
@@ -287,10 +456,21 @@ def main():
                         help="assume dependencies, database and model are ready")
     args = parser.parse_args()
 
+    if not args.skip_setup:
+        ensure_venv()          # may re-exec; everything after runs in .venv
+
+    # Restoring needs the database and the driver, but never the model, so it
+    # skips provisioning Ollama and the several gigabytes that come with it.
     if args.restore:
+        if not args.skip_setup:
+            install_docker()
+            ensure_docker_running()
+            install_dependencies()
+            start_database()
         return restore(args.restore)
 
     if not args.skip_setup:
+        provision(args.yes)
         install_dependencies()
         start_database()
     load_env()

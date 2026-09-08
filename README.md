@@ -6,17 +6,30 @@ Fact knowledge layer for the Superjoin VIT 2026 engineering intern assignment.
 
 Everything runs locally. No API keys, no paid services.
 
-**Prerequisites:** Python 3.10+, Docker Desktop (running), [Ollama](https://ollama.com),
-and a POSIX shell (Git Bash on Windows).
+**On Ubuntu, all you need is Python 3.10+ and sudo:**
 
 ```bash
-python run_pipeline.py
+python3 run_pipeline.py
 ```
 
-That one command installs the Python dependencies, brings up a three-node MongoDB
-replica set with TLS and RBAC, pulls the local model, ingests every PDF under
-`starter-datasets/`, asks you to confirm which entity each document is about,
-labels the evidence, adjudicates, and writes `factlayer-dump.zip`.
+That one command does the lot. It creates a virtualenv and re-runs itself inside
+it, installs Docker Engine and Ollama from their official installers, brings up a
+three-node MongoDB replica set with TLS and RBAC, pulls the local model, ingests
+every PDF under `starter-datasets/`, asks you to confirm which entity each
+document is about, labels the evidence, adjudicates, and writes
+`factlayer-dump.zip`. It lists what it is about to install and asks before
+touching anything.
+
+Three things that normally derail a first run are handled rather than explained:
+Ubuntu 24.04 marks the system Python externally managed (PEP 668), so the script
+works inside a virtualenv it creates; a freshly installed Docker leaves you
+outside the `docker` group until you log out and back in, so it falls back to
+`sudo docker` for the run; and Ollama answering is not the same as Ollama being
+able to load a model, so it asks the model to generate once before starting.
+
+**On macOS and Windows**, install [Docker Desktop](https://docker.com) and
+[Ollama](https://ollama.com) yourself first - both are GUI applications - then run
+the same command. Windows also needs a POSIX shell; use Git Bash.
 
 Useful flags:
 

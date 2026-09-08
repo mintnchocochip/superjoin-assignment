@@ -26,6 +26,8 @@ x-encrypted: &encrypted
     - -c
     - install -m 400 -o mongodb -g mongodb /etc/mongo/secrets/keyfile /keyfile
       && install -m 400 -o mongodb -g mongodb /etc/mongo/secrets/encryption.key /enc.key
+      && install -m 400 -o mongodb -g mongodb /etc/mongo/tls/server.pem /tls-server.pem
+      && install -m 444 -o mongodb -g mongodb /etc/mongo/tls/ca.crt /tls-ca.crt
       && exec /entrypoint.sh "$$@"
     - bash
   command: >
@@ -37,8 +39,8 @@ x-encrypted: &encrypted
       --encryptionKeyFile /enc.key
       --encryptionCipherMode AES256-CBC
       --tlsMode requireTLS
-      --tlsCertificateKeyFile /etc/mongo/tls/server.pem
-      --tlsCAFile /etc/mongo/tls/ca.crt
+      --tlsCertificateKeyFile /tls-server.pem
+      --tlsCAFile /tls-ca.crt
       --tlsAllowConnectionsWithoutCertificates
 
 services:

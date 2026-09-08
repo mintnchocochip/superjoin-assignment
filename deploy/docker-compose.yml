@@ -18,14 +18,25 @@ name: superjoin-facts
 x-mongod: &mongod
   image: mongo:8
   restart: unless-stopped
-  # mongod refuses a keyfile it considers world-readable, and a file bind-mounted
-  # from NTFS arrives 0777 no matter what the host says. Compose `configs` would
-  # be the tidy answer but it ignores uid/gid/mode outside swarm. So: copy it in
-  # and set the mode where the filesystem can express one.
+  # Every secret is copied in and re-owned before mongod starts, because bind
+  # mounts land differently on different hosts and mongod is strict about both
+  # directions:
+  #
+  #   too open   - it refuses a keyfile others can read, and a file bind-mounted
+  #                from NTFS arrives 0777 whatever the host says
+  #   too closed - the TLS key is 0400 owned by the host user, and on Linux, where
+  #                bind mounts DO enforce permissions, mongod has already dropped
+  #                to uid 999 and cannot read it. That crash-loops the container.
+  #
+  # Docker Desktop hides the second case by ignoring permissions altogether, so it
+  # only appears on Linux. Compose `configs` would be tidier but it ignores
+  # uid/gid/mode outside swarm.
   entrypoint:
     - bash
     - -c
     - install -m 400 -o mongodb -g mongodb /etc/mongo/secrets/keyfile /keyfile
+      && install -m 400 -o mongodb -g mongodb /etc/mongo/tls/server.pem /tls-server.pem
+      && install -m 444 -o mongodb -g mongodb /etc/mongo/tls/ca.crt /tls-ca.crt
       && exec docker-entrypoint.sh "$$@"
     - bash
   command: >
@@ -34,8 +45,8 @@ x-mongod: &mongod
       --bind_ip_all
       --keyFile /keyfile
       --tlsMode requireTLS
-      --tlsCertificateKeyFile /etc/mongo/tls/server.pem
-      --tlsCAFile /etc/mongo/tls/ca.crt
+      --tlsCertificateKeyFile /tls-server.pem
+      --tlsCAFile /tls-ca.crt
       --tlsAllowConnectionsWithoutCertificates
   extra_hosts:
     - "host.docker.internal:host-gateway"
@@ -44,7 +55,7 @@ x-mongod: &mongod
     MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?set in .env}
   healthcheck:
     test: >
-      mongosh --quiet --tls --tlsCAFile /etc/mongo/tls/ca.crt
+      mongosh --quiet --tls --tlsCAFile /tls-ca.crt
         --tlsAllowInvalidHostnames
         --eval "db.adminCommand('ping').ok" || exit 1
     interval: 10s

@@ -27,7 +27,7 @@ import re
 from datetime import datetime, timezone
 
 from pymongo import ASCENDING, MongoClient
-from pymongo.errors import DuplicateKeyError, OperationFailure
+from pymongo.errors import DuplicateKeyError
 
 URI = os.environ.get("MONGO_URI", "mongodb://localhost:27017/factlayer")
 DB_NAME = os.environ.get("MONGO_DB", "factlayer")
@@ -244,25 +244,28 @@ def list_pdfs():
 # --- evidence --------------------------------------------------------------
 
 def insert_evidence(rows):
-    """Insert mined evidence, ignoring rows already present.
+    """Write mined evidence, replacing any row already present.
 
-    Ids are content-derived, so re-mining a document is a no-op rather than a
-    duplication. ordered=False lets the rest of the batch land when some ids
-    already exist.
+    Ids are content-derived, so re-mining a document produces the same ids and
+    this reconciles rather than duplicating. It replaces rather than ignores
+    because a miner improvement - a new column band, a better label - has to be
+    able to reach documents that were ingested before it existed. Ignoring
+    duplicates made re-mining a silent no-op, which is the worst of both.
+
+    Claims are untouched: they reference evidence by id, and the ids do not move.
     """
     if not rows:
         return 0
-    docs = [dict(r, _id=r["id"]) for r in rows]
-    for d in docs:
-        d.pop("id", None)
-    try:
-        result = db().evidence.with_options(write_concern=_wc()).insert_many(docs, ordered=False)
-        return len(result.inserted_ids)
-    except OperationFailure as exc:
-        # Duplicate ids are expected on a re-mine; anything else is real.
-        if getattr(exc, "code", None) not in (11000,) and "E11000" not in str(exc):
-            raise
-        return 0
+    from pymongo import ReplaceOne
+
+    ops = []
+    for row in rows:
+        doc = dict(row, _id=row["id"])
+        doc.pop("id", None)
+        ops.append(ReplaceOne({"_id": doc["_id"]}, doc, upsert=True))
+
+    result = db().evidence.with_options(write_concern=_wc()).bulk_write(ops, ordered=False)
+    return result.upserted_count + result.modified_count
 
 
 def pending_evidence(doc_id):

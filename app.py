@@ -132,6 +132,28 @@ def corpora():
     return store.list_corpora()
 
 
+@app.post("/api/documents/{doc_id}/remine")
+def remine(doc_id: str):
+    """Re-run extraction over a document already ingested.
+
+    Needed because sha256 dedup refuses a re-upload, so without this a miner
+    improvement could only reach documents ingested after it. Evidence ids are
+    content-derived and do not move, so existing claims stay attached to their
+    evidence and no labelling is repeated - a new column band simply appears on
+    rows that were missing it.
+    """
+    pdf = store.get_pdf(doc_id)
+    if not pdf:
+        raise HTTPException(404, f"no document {doc_id}")
+    path = UPLOADS / f"{doc_id}.pdf"
+    if not path.exists():
+        raise HTTPException(410, f"the uploaded file for {doc_id} is no longer on disk")
+
+    _, rows = extract.mine_document(path, doc_id)
+    written = store.insert_evidence([dict(r, doc_id=doc_id) for r in rows])
+    return {"doc_id": doc_id, "mined": len(rows), "written": written}
+
+
 @app.post("/api/documents/{doc_id}/corpus")
 def assign_corpus(doc_id: str, name: str = "", doc_type: str = ""):
     """Confirm the proposed corpus, or reassign the document to another one.

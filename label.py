@@ -171,15 +171,26 @@ def period_from(text):
     return year
 
 
-def basis_from(section):
-    """Consolidation basis from the statement heading, or None."""
-    if not section:
+def basis_from(text):
+    """Consolidation basis stated in a heading or a column band, or None."""
+    if not text:
         return None
-    if CONSOLIDATED.search(section):
+    if CONSOLIDATED.search(text):
         return "consolidated"
-    if STANDALONE.search(section):
+    if STANDALONE.search(text):
         return "standalone"
     return None
+
+
+def known_basis(row):
+    """The basis for one figure, most specific source first.
+
+    A column band beats the statement heading, because a statement carrying both
+    consolidated and standalone columns has one heading and two answers - and
+    those columns are exactly the figures that otherwise look like a
+    contradiction. The model only gets a say when the page states neither.
+    """
+    return basis_from(row.get("col_basis")) or basis_from(row.get("section"))
 
 
 # Only evidence that could end up in a finding is worth 40 seconds of model time.
@@ -302,13 +313,13 @@ def ground(out, source, fields=GROUNDED):
 
 def _prompt(row):
     known_period = period_from(row.get("col_header"))
-    known_basis = basis_from(row.get("section"))
+    known = known_basis(row)
     value = " ".join(x for x in (row.get("currency"), row.get("value"), row.get("unit")) if x)
 
     return (
         f"SUBJECT (given):        {row.get('subject') or 'unknown'}\n"
         f"SECTION HEADER (given): {row.get('section') or 'none'}\n"
-        f"KNOWN BASIS (given):    {known_basis or 'unknown - determine from text below'}\n"
+        f"KNOWN BASIS (given):    {known or 'unknown - determine from text below'}\n"
         f"KNOWN PERIOD (given):   {known_period or 'unknown - determine from text below'}\n\n"
         f"CANDIDATE NUMBER:       {value or '(none - this is a text excerpt)'}\n"
         f"ROW LABEL (carried):    {row.get('row_label') or 'none'}\n"
@@ -436,7 +447,7 @@ def label_one(row, model=None, timeout=180):
         "metric": out.get("metric") or "",
         "metric_evidence": out.get("metric_evidence") or "",
         "period": period_from(row.get("col_header")) or out.get("period") or "",
-        "basis": basis_from(row.get("section")) or out.get("basis") or "",
+        "basis": known_basis(row) or out.get("basis") or "",
         "basis_evidence": out.get("basis_evidence") or "",
         "vintage": out.get("vintage") or "",
         "scope": out.get("scope") or "",
@@ -520,4 +531,11 @@ if __name__ == "__main__":
     assert period_from("Total") is None
     assert basis_from("Consolidated Statement of Profit and Loss") == "consolidated"
     assert basis_from("Revenue from operations") is None
+
+    # A column band is more specific than the statement heading above it. This is
+    # what separates two figures that a single heading cannot tell apart.
+    heading = "Consolidated Statement of Profit and Loss"
+    assert known_basis({"section": heading, "col_basis": "Standalone"}) == "standalone"
+    assert known_basis({"section": heading, "col_basis": None}) == "consolidated"
+    assert known_basis({"section": None, "col_basis": None}) is None
     print("label self-check ok")

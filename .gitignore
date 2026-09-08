@@ -3,3 +3,7 @@ uploads/
 facts.db
 __pycache__/
 .venv/
+.env
+deploy/secrets/
+deploy/tls/
+deploy/.env*

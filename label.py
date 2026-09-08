@@ -20,6 +20,7 @@ Two other things are structural rather than instructed:
   everything, including rows it went on to label correctly.
 """
 
+import difflib
 import json
 import os
 import re
@@ -153,8 +154,92 @@ def basis_from(section):
     return None
 
 
+# Only evidence that could end up in a finding is worth 40 seconds of model time.
+# A finding needs two claims about the same metric to compare, so a figure whose
+# row label names nothing on this list can never produce one - it is stored, and
+# simply not labelled.
+TARGETS = {
+    "revenue": ("revenue", "revenue from operations", "total income", "net sales", "turnover"),
+    "profit": ("profit for the year", "net profit", "profit after tax", "pat",
+               "loss for the year", "profit before tax"),
+    "ebitda": ("ebitda", "operating profit", "adjusted ebitda"),
+    "expenses": ("total expenses", "total expenditure", "cost of services", "finance costs"),
+    "assets": ("total assets", "non-current assets", "current assets"),
+    "equity": ("total equity", "total liabilities", "net worth", "shareholders funds"),
+    "eps": ("earnings per share", "basic eps", "diluted eps"),
+    "cash": ("cash and cash equivalents", "free cash flow", "net cash"),
+    "margin": ("gross margin", "operating margin", "ebitda margin"),
+    "capex": ("capital expenditure", "capex", "additions to property"),
+    "borrowings": ("borrowings", "lease liabilities", "total debt"),
+    "tax": ("tax expense", "current tax", "deferred tax"),
+    "volume": ("shipments", "tonnage", "parcels", "freight volume", "orders"),
+    "employees": ("employee benefits expense", "headcount", "number of employees"),
+    "gdp": ("gdp growth", "real gdp", "gross domestic product", "gross value added"),
+    "inflation": ("inflation", "consumer price index", "wholesale price index",
+                  "headline inflation", "core inflation"),
+    "fiscal": ("fiscal deficit", "current account deficit", "revenue deficit",
+               "primary deficit"),
+    "trade": ("exports", "imports", "trade deficit", "trade balance"),
+    "reserves": ("foreign exchange reserves", "forex reserves"),
+    "credit": ("bank credit", "credit growth", "repo rate", "policy rate"),
+}
+TERMS = tuple(sorted({t for group in TARGETS.values() for t in group}, key=len, reverse=True))
+
+# Prose is worth labelling only when something happened to somebody. Everything
+# else on these pages is disclaimer, boilerplate and navigation.
+EVENTS = (
+    "appointed", "re-appointed", "resigned", "retired", "ceased to be", "stepped down",
+    "acquired", "acquisition", "divested", "merged", "amalgamat",
+    "guidance", "expects", "expected to", "outlook", "projected", "forecast",
+    "approved", "declared", "commissioned", "launched", "stake in",
+)
+
+NOISE = re.compile(r"[^a-z ]+")
+
+
 def _norm(text):
     return re.sub(r"\s+", " ", (text or "")).strip().lower()
+
+
+def _bare(text):
+    """Lowercase words only - figures and punctuation stripped, so a row label
+    matches its target term regardless of the numbers sitting next to it."""
+    return re.sub(r"\s+", " ", NOISE.sub(" ", _norm(text))).strip()
+
+
+def target_metric(row_label, cutoff=0.86):
+    """The target group this row label belongs to, or None.
+
+    Substring first because it settles most rows for nothing. difflib only sees
+    what survives, which is where the near-misses live: hyphenation, an inserted
+    word, a trailing '(contd.)'.
+    """
+    bare = _bare(row_label)
+    if not bare:
+        return None
+    for group, terms in TARGETS.items():
+        if any(term in bare for term in terms):
+            return group
+    close = difflib.get_close_matches(bare, TERMS, n=1, cutoff=cutoff)
+    if close:
+        return next(g for g, terms in TARGETS.items() if close[0] in terms)
+    return None
+
+
+def worth_labelling(row, subject=""):
+    """Whether this evidence could ever appear in a finding."""
+    if not row.get("accepted"):
+        return False
+    if row["kind"] == "number":
+        return target_metric(row.get("row_label")) is not None
+    bare = _bare(row.get("text"))
+    if not bare:
+        return False
+    if any(verb in bare for verb in EVENTS):
+        return True
+    # A subject named in prose is worth a look even without an event verb.
+    words = [w for w in _bare(subject).split() if len(w) > 3]
+    return bool(words) and any(w in bare for w in words)
 
 
 def provided_text(row):
@@ -282,6 +367,25 @@ if __name__ == "__main__":
     loose = ground({"metric": "revenue_from_operations",
                     "metric_evidence": "revenue   from  OPERATIONS"}, src)
     assert loose["metric"] == "revenue_from_operations", loose
+
+    assert target_metric("Revenue from Operations") == "revenue"
+    assert target_metric("Profit for the year 8,142") == "profit"
+    assert target_metric("Total assets") == "assets"
+    assert target_metric("Gross domestic product at constant prices") == "gdp"
+    assert target_metric("Peer Review Certificate No.") is None
+    assert target_metric("Rubber waste") is None
+    assert target_metric(None) is None
+
+    assert worth_labelling({"accepted": True, "kind": "number", "row_label": "Total income"})
+    assert not worth_labelling({"accepted": True, "kind": "number", "row_label": "Rubber waste"})
+    assert not worth_labelling({"accepted": False, "kind": "number", "row_label": "Total income"})
+    assert worth_labelling(
+        {"accepted": True, "kind": "text", "text": "Mr X was appointed as director"})
+    assert not worth_labelling(
+        {"accepted": True, "kind": "text", "text": "This presentation is for information"})
+    assert worth_labelling(
+        {"accepted": True, "kind": "text", "text": "Delhivery operates 90 gateways"},
+        subject="delhivery limited")
 
     assert period_from("March 31, 2023") == "FY2023"
     assert period_from("Q4 FY24") == "Q4-FY2024"

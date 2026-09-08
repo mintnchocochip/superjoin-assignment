@@ -18,6 +18,8 @@ explained.
     python run_pipeline.py --limit 50      # cap model calls per document
     python run_pipeline.py --pdfs some/dir # ingest a different folder
     python run_pipeline.py --restore f.zip # load a dump someone sent back
+    python run_pipeline.py --setup-only    # install everything, then drive the UI
+    python run_pipeline.py --dump-only     # zip up whatever is in the database
 
 It is safe to stop and re-run. Claims are keyed by evidence id and already
 labelled evidence is skipped, so a second run resumes where the first stopped
@@ -454,7 +456,15 @@ def main():
                         help="load a dump instead of running the pipeline")
     parser.add_argument("--skip-setup", action="store_true",
                         help="assume dependencies, database and model are ready")
+    parser.add_argument("--setup-only", action="store_true",
+                        help="install everything and stop, for driving the UI by hand")
+    parser.add_argument("--dump-only", action="store_true",
+                        help="write factlayer-dump.zip from whatever is in the database")
     args = parser.parse_args()
+
+    if args.dump_only:
+        load_env()
+        return write_dump()
 
     if not args.skip_setup:
         ensure_venv()          # may re-exec; everything after runs in .venv
@@ -476,6 +486,14 @@ def main():
     load_env()
     if not args.skip_setup:
         ensure_model()
+
+    if args.setup_only:
+        say("\nReady. Start the interface with:\n"
+            f"    {sys.executable} -m uvicorn app:app --port 8000\n"
+            "then open http://localhost:8000 and drop the PDFs in.\n"
+            "When you are done, write the dump with:\n"
+            f"    {sys.executable} run_pipeline.py --dump-only")
+        return
 
     ingest_documents(args.pdfs)
     confirm_corpora(args.yes)

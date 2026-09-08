@@ -4,7 +4,83 @@ Fact knowledge layer for the Superjoin VIT 2026 engineering intern assignment.
 
 ## Setup and Run Instructions
 
-_TODO_
+Everything runs locally. No API keys, no paid services.
+
+**On Ubuntu, all you need is Python 3.10+ and sudo:**
+
+```bash
+python3 run_pipeline.py
+```
+
+That one command does the lot. It creates a virtualenv and re-runs itself inside
+it, installs Docker Engine and Ollama from their official installers, brings up a
+three-node MongoDB replica set with TLS and RBAC, pulls the local model, ingests
+every PDF under `starter-datasets/`, asks you to confirm which entity each
+document is about, labels the evidence, adjudicates, and writes
+`factlayer-dump.zip`. It lists what it is about to install and asks before
+touching anything.
+
+Three things that normally derail a first run are handled rather than explained:
+Ubuntu 24.04 marks the system Python externally managed (PEP 668), so the script
+works inside a virtualenv it creates; a freshly installed Docker leaves you
+outside the `docker` group until you log out and back in, so it falls back to
+`sudo docker` for the run; and Ollama answering is not the same as Ollama being
+able to load a model, so it asks the model to generate once before starting.
+
+**On macOS and Windows**, install [Docker Desktop](https://docker.com) and
+[Ollama](https://ollama.com) yourself first - both are GUI applications - then run
+the same command. Windows also needs a POSIX shell; use Git Bash.
+
+Useful flags:
+
+| flag | effect |
+|---|---|
+| `--yes` | accept every proposed entity without asking |
+| `--limit N` | cap model calls per document, for a quick partial run |
+| `--pdfs DIR` | ingest a different folder |
+| `--skip-setup` | dependencies, database and model are already up |
+| `--restore FILE.zip` | load a dump instead of running anything |
+
+**It is safe to stop and re-run.** Claims are keyed by evidence id and already
+labelled evidence is skipped, so a second run resumes rather than restarting or
+duplicating.
+
+**Budget the time.** Mining is about a second per 100-page PDF. Labelling is
+roughly 40 seconds per model call and around 1,500 calls across the six starter
+documents, so a full run wants a GPU and a few hours. `--limit 40` gives a
+representative sample in minutes.
+
+### Running it on someone else's machine
+
+The labelling is the only slow part, and it is portable. Whoever has the faster
+GPU runs `python run_pipeline.py` and sends back `factlayer-dump.zip`; you load it
+with no model involved:
+
+```bash
+python run_pipeline.py --restore factlayer-dump.zip
+```
+
+The dump is JSONL per collection rather than `mongodump`, because the official
+MongoDB server image does not always ship the database tools and a dump you
+cannot produce on the machine holding the data is not a dump.
+
+### The web UI
+
+```bash
+python -m uvicorn app:app --port 8000
+```
+
+Upload PDFs, confirm each document's entity, inspect mined evidence with its
+source line and page, and read findings as two quotes side by side with the
+verdict between them.
+
+### Checks
+
+Three self-checks run without a database, a model, or a network:
+
+```bash
+python extract.py && python label.py && python verdict.py
+```
 
 ## Video Demo
 
@@ -237,13 +313,64 @@ Cross-document contradiction detection over numbers is therefore **deterministic
 reproducible** — it does not depend on a prompt behaving the same way twice. The model's
 role is confined to labelling and to semantic claims.
 
+### Storage
+
+MongoDB, as a three-node replica set in Docker. `deploy/bootstrap.sh` brings the
+whole thing up from nothing and is safe to re-run:
+
+```bash
+bash deploy/bootstrap.sh
+```
+
+It generates credentials, an internal-auth keyfile, a self-signed CA and server
+certificate, starts the nodes, initiates the set, and applies roles. Everything
+it generates is gitignored; no credential is committed, and the application
+connection string is written to `.env`.
+
+**RBAC.** Three principals. `root` administers the cluster and is never used by
+the application. `facts_app` holds a custom `factsWriter` role over exactly the
+four collections. `facts_ro` holds `factsReader` and can only read. The writer
+role is custom rather than the built-in `readWrite` because `readWrite` carries
+`dropCollection` and `dropDatabase` - an ingest bug should be able to write a bad
+claim, not delete the corpus. Verified: the app user is refused both a collection
+drop and a read of the `admin` database, and the read-only user is refused a
+write.
+
+**Encryption in transit.** `--tlsMode requireTLS` on every client and
+intra-cluster connection, against the generated CA. Verified: a `tls=false`
+client is refused.
+
+**Encryption at rest.** Not enabled by default, and this is a real limitation
+rather than an oversight. WiredTiger encryption at rest is a MongoDB *Enterprise*
+feature; the Community image cannot do it at any setting. `ENCRYPTED=1 bash
+deploy/bootstrap.sh` switches the images to Percona Server for MongoDB, a
+Community fork that does ship it, and enables `--enableEncryption` with
+AES256-CBC. That key sits on the same host as the data it encrypts, which
+protects a stolen disk image and nothing else; a real deployment would point at a
+KMIP service.
+
+**Availability.** Three voting members, so one can be lost without losing the
+primary, and writes use `w: "majority"` with journalling - a claim that only
+reached the primary is a claim that disappears when the primary does. On a single
+host this survives a process failure, not a machine failure: it gives real
+election and replication semantics, not real HA.
+
+One consequence worth stating plainly. Members are named by their container
+hostnames, which is what lets each node recognise itself and reach its peers. A
+driver running on the host cannot follow that topology, because it would be told
+to dial `mongo2`, which does not resolve outside the compose network. So the
+application connects with `directConnection=true` to the primary's mapped port.
+The cluster still replicates and still elects; the *client* will not fail over on
+its own. Mapping `mongo1`/`mongo2`/`mongo3` to `127.0.0.1` in the host's hosts
+file removes the restriction, at the cost of a change outside the repository.
+
 ### Stack
 
 | Layer | Choice | Why |
 |---|---|---|
 | API | FastAPI + `BackgroundTasks` | Ingest takes minutes; async without adding a queue broker |
 | PDF | PyMuPDF (`fitz`) | Text, page index, and bounding boxes from one dependency |
-| Store | MongoDB | Relations are a table with two foreign keys, not a graph |
+| Store | MongoDB replica set | Relations are a table with two foreign keys, not a graph; three nodes for majority writes |
 | Labelling | Ollama · `qwen2.5:7b-instruct` | Runs locally, no API spend; good JSON adherence at this size |
 | Aliasing | Ollama · `nomic-embed-text` | 137M params, CPU-speed |
 | UI | One static page against the API | Not a frontend project |
@@ -269,6 +396,8 @@ GET  /findings?type=contradicts|reconcilable|corroborates
 | Templated reason strings | Instant, consistent, no model call | Less fluent than generated prose |
 | Page filtering before any model call | Cuts a ~600-page corpus to roughly a third | A fact on a page with no digits is missed |
 | No graph database | The brief rules it out, and the relation layer is one embedded array | None identified |
+| Evidence as its own collection, not embedded on the claim as drawn above | The two halves have different writers and lifecycles: evidence is deterministic and immutable, claims are model-written and re-runnable | One extra lookup on the inspection query |
+| `directConnection` from the host | Container-named members are what let nodes self-identify and reach peers | Client-side failover needs a hosts-file entry |
 | `sha256` dedup on upload | A re-uploaded file would otherwise manufacture corroborations between a document and its own copy | None |
 
 ### AI tools used

@@ -28,6 +28,11 @@ NUMBER = re.compile(
 YEAR = re.compile(r"^(?:19|20)\d{2}$")
 NUMERIC_CELL = re.compile(r"^[₹$(]?\s*[\d,]+(?:\.\d+)?\s*[%)]?$")
 
+# The band that says which consolidation a group of columns reports. It sits
+# above the period band in a statement, spans several columns at once, and is
+# the only place that distinction is written down.
+BASIS_CELL = re.compile(r"\b(consolidated|standalone)\b", re.IGNORECASE)
+
 # A cell that names a reporting period. In these filings the column headers are
 # exactly these, which is what lets a figure be tied to a period.
 PERIOD_CELL = re.compile(
@@ -113,6 +118,25 @@ def _header_for(cells, headers):
     return None
 
 
+def _spanning_owner(cell, spans):
+    """The spanning header a column belongs to, by nearest centre.
+
+    Period headers sit directly over their own column, so plain x-overlap finds
+    them. A basis header does not: "Consolidated" is one short word centred over
+    a *group* of columns, so it overlaps some of the columns it owns and none of
+    the others, and overlap matching returns nothing. Assigning each column to
+    the nearest header centre is what the layout actually means.
+
+    Without this, a four-column statement - consolidated and standalone, each
+    with two years - yields four figures that differ only by a qualifier nobody
+    captured, and the adjudicator can say nothing about any pair of them.
+    """
+    if not spans:
+        return None
+    centre = (cell[0] + cell[1]) / 2
+    return min(spans, key=lambda s: abs(centre - (s[0] + s[1]) / 2))[2]
+
+
 def _reject_reason(row_text, match, label):
     digits = match.group("value").replace(",", "")
     qualified = bool(match.group("currency") or match.group("unit"))
@@ -146,6 +170,20 @@ def _printed_page(rows):
     return None
 
 
+def classify_row(cells):
+    """What kind of row this is: 'basis', 'period', or 'data'.
+
+    Extracted so the band rules can be checked without opening a PDF.
+    """
+    if not any(NUMERIC_CELL.match(c[2].strip()) for c in cells):
+        if [c for c in cells if BASIS_CELL.search(c[2]) and len(c[2]) <= 60]:
+            return "basis"
+    labelled = [c for c in cells if PERIOD_CELL.search(c[2])]
+    if labelled and len(labelled) >= max(1, len(cells) - 1):
+        return "period"
+    return "data"
+
+
 def mine(pdf_path, doc_id):
     """Yield evidence rows: mined numbers, and prose excerpts worth labelling."""
     doc = pymupdf.open(pdf_path)
@@ -153,7 +191,7 @@ def mine(pdf_path, doc_id):
         for pdf_page, page in enumerate(doc):
             rows = list(_bands(page))
             printed = _printed_page(rows)
-            row_label, headers = None, []
+            row_label, headers, bases = None, [], []
             # The statement heading a row sits under. It is what states the
             # consolidation basis, so it has to reach the labeller as quotable text.
             section, context = None, deque(maxlen=3)
@@ -176,11 +214,19 @@ def mine(pdf_path, doc_id):
                 # consolidation basis as text the labeller can quote.
                 if STATEMENT.search(text):
                     section = text.strip()
+                    # A new statement invalidates the column layout above it.
+                    headers, bases = [], []
 
-                # A row of period names is the column header for the rows below it.
-                labelled = [c for c in cells if PERIOD_CELL.search(c[2])]
-                if labelled and len(labelled) >= max(1, len(cells) - 1):
-                    headers = labelled
+                # A band naming consolidations owns the columns beneath it until
+                # the next statement; a band of period names is the column header
+                # for the rows below. classify_row decides which, so the rule the
+                # self-check exercises is the rule that actually runs here.
+                kind = classify_row(cells)
+                if kind == "basis":
+                    bases = [c for c in cells if BASIS_CELL.search(c[2])]
+                    continue
+                if kind == "period":
+                    headers = [c for c in cells if PERIOD_CELL.search(c[2])]
                     continue
 
                 # The leading non-numeric cells name the row.
@@ -206,6 +252,7 @@ def mine(pdf_path, doc_id):
                             "section": section,
                             "context": "\n".join(context),
                             "col_header": _header_for(cell, headers),
+                            "col_basis": _spanning_owner(cell, bases),
                             "value": match.group("value"),
                             "currency": (match.group("currency") or "").strip(),
                             "unit": (match.group("unit") or "").strip(),
@@ -225,6 +272,7 @@ def mine(pdf_path, doc_id):
                         "printed_page": printed,
                         "text": text,
                         "row_label": None,
+                        "col_basis": None,
                         "section": section,
                         "context": "\n".join(context),
                         "col_header": None,
@@ -242,6 +290,27 @@ def mine(pdf_path, doc_id):
         doc.close()
 
 
+def cover_text(pdf_path, pages=2, limit=2500):
+    """The opening pages as text, for identifying what the document is.
+
+    Same band reconstruction as the miner, so the entity name on a title page
+    survives as one line instead of arriving one word per line.
+    """
+    doc = pymupdf.open(pdf_path)
+    try:
+        out = []
+        for page in list(doc)[:pages]:
+            for cells in _bands(page):
+                line = " ".join(c[2] for c in cells).strip()
+                if line:
+                    out.append(line)
+        return "\n".join(out)[:limit]
+    finally:
+        doc.close()
+
+
+
+
 def mine_document(pdf_path, doc_id):
     """Mine a document and stamp every row with its stable id. Returns (pages, rows)."""
     doc = pymupdf.open(pdf_path)
@@ -257,3 +326,49 @@ def mine_document(pdf_path, doc_id):
         row["doc_id"] = doc_id
         rows.append(row)
     return pages, rows
+
+
+if __name__ == "__main__":
+    # A four-column statement, laid out as these filings lay them out: one basis
+    # band spanning two year columns each, centred over its own group.
+    #
+    #                  Consolidated              Standalone
+    #            Mar 31 2024  Mar 31 2023   Mar 31 2024  Mar 31 2023
+    #  Revenue      81,415.38    72,253.01     74,540.82    66,586.61
+    basis_band = [(200.0, 265.0, "Consolidated"), (340.0, 395.0, "Standalone")]
+    period_band = [
+        (180.0, 230.0, "March 31, 2024"), (250.0, 300.0, "March 31, 2023"),
+        (320.0, 370.0, "March 31, 2024"), (390.0, 440.0, "March 31, 2023"),
+    ]
+    data = [
+        (60.0, 140.0, "Revenue from operations"),
+        (185.0, 228.0, "81,415.38"), (255.0, 298.0, "72,253.01"),
+        (325.0, 368.0, "74,540.82"), (395.0, 438.0, "66,586.61"),
+    ]
+
+    # Every figure must land under the right consolidation. Before this, all four
+    # carried no basis at all and were mutually indistinguishable.
+    owners = [_spanning_owner(c, basis_band) for c in data[1:]]
+    assert owners == ["Consolidated", "Consolidated", "Standalone", "Standalone"], owners
+
+    # Periods keep using overlap, because a period header sits over its own column.
+    periods = [_header_for(c, period_band) for c in data[1:]]
+    assert periods == ["March 31, 2024", "March 31, 2023",
+                       "March 31, 2024", "March 31, 2023"], periods
+
+    # Together the four are now distinct, which is the whole point.
+    assert len(set(zip(owners, periods))) == 4
+
+    # Row classification: the basis band must not be mistaken for data, and a
+    # data row that merely mentions "consolidated" must not become a band.
+    assert classify_row(basis_band) == "basis"
+    assert classify_row(period_band) == "period"
+    assert classify_row(data) == "data"
+    assert classify_row([(60.0, 300.0, "Tax expense recognised in consolidated financials"),
+                         (320.0, 360.0, "885.20")]) == "data"
+
+    # One spanning header owns everything beneath it.
+    assert _spanning_owner(data[1], [(200.0, 400.0, "Consolidated")]) == "Consolidated"
+    assert _spanning_owner(data[1], []) is None
+
+    print("extract self-check ok")

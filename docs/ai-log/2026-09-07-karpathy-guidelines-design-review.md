@@ -1,6 +1,6 @@
 # Karpathy guidelines design review
 
-Session `3623c6ed` · 45 turns
+Session `3623c6ed` · 54 turns
 
 ## Turn 1 — 2026-09-07 13:25
 
@@ -3114,5 +3114,511 @@ Verified: the retune against a stand-in server (stale host dropped, live one ado
 ## What I still can't claim
 
 I've verified Windows directly and reasoned about Linux from the diagnostics. Everything through the model download is now proven on their box across three runs; **labelling running to completion is not** — that's what this run tests. Given I've been wrong twice about this environment already, that's the honest boundary.
+
+---
+
+## Turn 46 — 2026-09-08 14:57
+
+**Me:**
+
+> push
+
+*[Claude ran 3 tools: Bash ×3]*
+
+**Claude:**
+
+Nothing was left unpushed — `edf35cf` is on the remote. What's outstanding is the AI transparency log:
+
+Pushed `305e902` — the transparency log (new session entry plus the index and turn count). Working tree is clean.
+
+Scanned it before pushing: no credentials, and the one `MONGO_URI` mention is placeholder-redacted.
+
+One thing worth knowing — `docs/ai-log/README.md` says personal identifiers are redacted, but the **already-committed** `2026-09-07-implementation-status.md` contains `C:\Users\Shawf` in about half a dozen places. The new file is clean; this is pre-existing, not something this push added. Say the word if you want those scrubbed.
+
+---
+
+## Turn 47 — 2026-09-08 15:05
+
+**Me:**
+
+> give enf for running it on ubuntu
+
+**Claude:**
+
+Reading that as "give the `.env`" — short answer: **you shouldn't hand one over, and they don't need one.** `bootstrap.sh` generates it on their machine, with their own passwords and their own CA path. That's exactly the file that broke their run.
+
+If they have a copied folder, this is the whole fix:
+
+```bash
+rm -f .env
+python3 run_pipeline.py --setup-only
+```
+
+## What it will write
+
+Passwords are generated locally (`openssl rand`), `MONGO_URI` is rebuilt every run from the real CA path, and **no `OLLAMA_HOST` line** — Ubuntu's default 11434 is correct:
+
+```
+MONGO_ROOT_USER=facts_root
+MONGO_ROOT_PASSWORD=<generated>
+MONGO_APP_USER=facts_app
+MONGO_APP_PASSWORD=<generated>
+MONGO_READONLY_USER=facts_ro
+MONGO_READONLY_PASSWORD=<generated>
+MONGO_DB=factlayer
+MONGO_URI=mongodb://facts_app:<generated>@localhost:27017/factlayer?directConnection=true&tls=true&tlsCAFile=/home/irk/.../deploy/tls/ca.crt&tlsAllowInvalidHostnames=true&authSource=factlayer
+```
+
+`deploy/secrets/` and `deploy/tls/` get regenerated alongside it. Those are gitignored too, and the keyfile in there has to match the cluster — which is why `down -v` and a fresh `.env` go together.
+
+## Full Ubuntu sequence
+
+```bash
+git pull
+rm -f .env
+cd deploy && sudo docker compose down -v && cd ..
+python3 run_pipeline.py --setup-only
+```
+
+Note `down -v` without `--env-file` there — the old `.env` is gone by that point, and compose only needs the project name to find the volumes. If it complains, run the `down -v` *before* the `rm`.
+
+Then:
+
+```bash
+source .venv/bin/activate
+python -m uvicorn app:app --port 8000
+```
+
+If you actually meant "enough instructions to run it on Ubuntu" — that's the `RUN-THIS.md` I sent last turn, which now covers this. Say which and I'll expand the other one.
+
+---
+
+## Turn 48 — 2026-09-08 15:07
+
+**Me:**
+
+> superjoin-assignment on  main [?] via  v3.14.4 
+> ❯ cd deploy && sudo docker compose --env-file ../.env down -v && cd .. python3 run_pipeline.py --setup-only
+> [+] down 7/7
+>  ✔️ Container facts-mongo3             Removed                                                                 10.2s
+>  ✔️ Container facts-mongo1             Removed                                                                 10.3s
+>  ✔️ Container facts-mongo2             Removed                                                                 10.3s
+>  ✔️ Volume superjoin-facts_mongo2-data Removed                                                                  0.0s
+>  ✔️ Volume superjoin-facts_mongo3-data Removed                                                                  0.0s
+>  ✔️ Volume superjoin-facts_mongo1-data Removed                                                                  0.0s
+>  ✔️ Network superjoin-facts_default    Removed                                                                  0.2s
+> cd: too many arguments
+>
+> superjoin-assignment/deploy on  main [?] took 10s
+
+*[Claude ran 2 tools: Bash ×2]*
+
+**Claude:**
+
+Two problems, and the shell error is the harmless one.
+
+**The paste joined two lines.** `cd .. python3 run_pipeline.py --setup-only` is one command with four arguments. They're still in `deploy/` now.
+
+**The real one: they're on `main`, which has none of the fixes.** `main` is at `e9aa03b` and still pins `image: mongo:8` — so the kernel error is about to come back verbatim. All three fixes (`mongo:7`, the `.env` repair, the log) are on `evidence-mining-and-labelling`, sitting in [PR #3](https://github.com/mintnchocochip/superjoin-assignment/pull/3).
+
+## What they should run
+
+```bash
+cd ..
+git fetch origin
+git checkout evidence-mining-and-labelling
+rm -f .env
+python3 run_pipeline.py --setup-only
+```
+
+The `down -v` already succeeded, so no need to repeat it.
+
+Verify before the long wait — this must print `mongo:7`:
+
+```bash
+grep image: deploy/docker-compose.yml
+```
+
+## Your call
+
+They cloned properly this time, which is why they landed on `main` — a fresh clone always will. If you merge PR #3, a plain `git clone` just works and nobody has to know a branch name. I haven't merged it; that's yours to decide.
+
+---
+
+## Turn 49 — 2026-09-08 15:16
+
+**Me:**
+
+> superjoin-assignment on  main [?] via  v3.14.4 
+> ❯ python3 run_pipeline.py --setup-only
+> ==> re-running inside /home/irk/Desktop/project run/mani/superjoin-assignment/.venv/bin/python
+> ==> starting the Docker daemon
+> ==> using sudo for docker (group membership needs a re-login)
+> ==> installing Python dependencies
+> ==> starting MongoDB replica set
+> ==> starting three mongod nodes
+> [+] up 3/3
+>  ✔️ Container facts-mongo2 Started                                                                              0.0s
+>  ✔️ Container facts-mongo3 Started                                                                              0.0s
+>  ✔️ Container facts-mongo1 Started                                                                              0.0s
+> ==> waiting for mongo1 to accept authenticated connections
+> ==> initiating replica set
+> Error response from daemon: Container cc644ea69ffd118e170e5c04880e52540588f53d0d4b24c7a5c6cb1c035030b3 is restarting, wait until the container is running
+>
+> [stop] deploy/bootstrap.sh failed
+>        Its output above says why.
+>
+> superjoin-assignment on  main [?] via  v3.14.4 took 2m4s 
+> ❯ my firend is getting this error now
+
+*[Claude ran 1 tool: Bash ×1]*
+
+**Claude:**
+
+Same error, same cause: **the prompt still says `on main`.** The branch switch didn't happen — main's `bootstrap.sh` has no readiness diagnostic, which is why you got the bare "Container is restarting" instead of mongod's actual log. It's running `mongo:8` against kernel 7.0 again.
+
+Have them run these **one at a time** — the last paste got joined into a single line:
+
+```bash
+git checkout evidence-mining-and-labelling
+```
+
+Then confirm it took. This must print `mongo:7`, and the prompt should now say `on evidence-mining-and-labelling`:
+
+```bash
+grep image: deploy/docker-compose.yml
+```
+
+Only if that says `mongo:7`, clear the half-started volumes:
+
+```bash
+cd deploy && sudo docker compose --env-file ../.env down -v && cd ..
+```
+
+Then:
+
+```bash
+python3 run_pipeline.py --setup-only
+```
+
+If `git checkout` fails, it'll say why — likely local changes to tracked files. `git stash` clears that.
+
+---
+
+This is the second run lost to the branch. Want me to merge [PR #3](https://github.com/mintnchocochip/superjoin-assignment/pull/3) into `main`? Then their existing clone just needs `git checkout main && git pull`, and nobody has to remember a branch name again. Your repo, so I haven't touched it.
+
+---
+
+## Turn 50 — 2026-09-08 15:20
+
+**Me:**
+
+> git checkout evidence-mining-and-labelling
+> error: The following untracked working tree files would be overwritten by checkout:
+> 	.gitattributes
+> Please move or remove them before you switch branches.
+> Aborting
+>
+> superjoin-assignment on  main [?] via  v3.14.4 
+> ❯ cat .gitattributes
+> # Shell scripts must reach Linux with LF endings. This repo is developed on
+> # Windows, where git happily rewrites LF to CRLF on checkout - and a bootstrap.sh
+> # carrying \r fails on Ubuntu with "set: pipefail: invalid option name", because
+> # bash reads the carriage return as part of the option.
+> * text=auto eol=lf
+>
+> *.sh    text eol=lf
+> *.py    text eol=lf
+> *.js    text eol=lf
+> *.yml   text eol=lf
+> *.html  text eol=lf
+> *.md    text eol=lf
+>
+> *.pdf   binary
+> *.zip   binary
+>
+> superjoin-assignment on  main [?] via  v3.14.4
+
+*[Claude ran 1 tool: Bash ×1]*
+
+**Claude:**
+
+That file is untracked because it was copied in from the old folder — and it's **byte-identical** to the one on the branch, which will restore it. Deleting it loses nothing:
+
+```bash
+rm .gitattributes
+```
+
+```bash
+git checkout evidence-mining-and-labelling
+```
+
+That should now succeed and the prompt should read `on evidence-mining-and-labelling`.
+
+Worth one look before continuing — if `.gitattributes` was copied across, other files probably were too, and a stale `.env` is the one that matters:
+
+```bash
+git status --short
+```
+
+If `.env` shows up there and it came from your machine rather than their own `bootstrap.sh`, `rm .env` — the branch repairs the paths automatically now, but the passwords in it would still be yours.
+
+Then the rest, one at a time:
+
+```bash
+grep image: deploy/docker-compose.yml
+```
+
+```bash
+cd deploy && sudo docker compose --env-file ../.env down -v && cd ..
+```
+
+```bash
+python3 run_pipeline.py --setup-only
+```
+
+---
+
+## Turn 51 — 2026-09-08 15:21
+
+**Me:**
+
+> i merged into main gng
+
+*[Claude ran 1 tool: Bash ×1]*
+
+**Claude:**
+
+Confirmed on the remote — `main` is now `df4f7f2` and carries all three fixes: `image: ${MONGO_IMAGE:-mongo:7}`, the `.env` repair, and the readiness diagnostic.
+
+Your friend can stay on `main`. But the untracked `.gitattributes` will block `git pull` for the same reason it blocked the checkout, so that goes first:
+
+```bash
+rm .gitattributes
+```
+
+```bash
+git pull
+```
+
+Verify it landed — must print `mongo:7`:
+
+```bash
+grep image: deploy/docker-compose.yml
+```
+
+Clear the volumes from the failed `mongo:8` attempts:
+
+```bash
+cd deploy && sudo docker compose --env-file ../.env down -v && cd ..
+```
+
+```bash
+python3 run_pipeline.py --setup-only
+```
+
+Still worth a glance at `git status --short` for anything else copied in from the old folder — a stale `.env` is the one that would carry your passwords onto their box.
+
+If it fails again, the diagnostic is now on their side too: it'll print mongod's own last 25 lines instead of "Container is restarting". Send me that.
+
+---
+
+## Turn 52 — 2026-09-08 15:36
+
+**Me:**
+
+> Replica set rs0 is up on 27017/27018/27019. TLS required, RBAC on.
+> The application connection string is in ../.env (gitignored).
+> ==> checking Ollama at http://127.0.0.1:11434
+> ==> starting the Ollama service
+>
+> [stop] Ollama is not answering at http://127.0.0.1:11434
+>        Start it with: sudo systemctl restart ollama
+>
+> superjoin-assignment on  evidence-mining-and-labelling via  v3.14.4 took 1m18s ....again ollama is not connecting properly
+
+*[Claude ran 12 tools: Bash ×8, Edit ×3, Write ×1]*
+
+**Claude:**
+
+MongoDB is fully up now — that whole leg is done. This is a different, smaller gap, and it's mine.
+
+**Immediate unblock** (they already proved this works — it bound 11434 and saw the 5070 Ti). In a second terminal:
+
+```bash
+ollama serve
+```
+
+Leave it running, then re-run the setup in the first terminal:
+
+```bash
+python3 run_pipeline.py --setup-only
+```
+
+Now the actual fix:
+
+Pushed `c3f9c56`.
+
+## Why it failed
+
+`ensure_ollama_running()` on Linux tried exactly one thing — `sudo systemctl enable --now ollama` — and **threw away the error**. If there's no systemd unit (which is the case for a tarball or snap install, and your friend running `ollama serve` by hand earlier hints at that), it fails with "unit ollama.service not found", the script waits 60s regardless, then reports Ollama silent.
+
+The fallback that just runs the server directly already existed — but it was in the `else` branch, reachable only on machines with *no systemd at all*. So Linux could never get to it. My structuring error.
+
+Now both routes get a turn, output goes to `ollama-serve.log` instead of `/dev/null`, and the tail prints on failure. The server is also detached so it survives the script exiting — uvicorn needs it afterwards.
+
+**I'm not certain that's the cause.** It fits, but a masked unit or a sudo prompt that never got answered fit too. The difference is that all three now end with the server running, and if it still doesn't, the log says why instead of nothing.
+
+## For your friend
+
+They're on `evidence-mining-and-labelling`, so:
+
+```bash
+git pull
+```
+
+```bash
+python3 run_pipeline.py --setup-only
+```
+
+The manual `ollama serve` in a second terminal still works as a bypass if they'd rather not wait for a pull.
+
+## One note
+
+`main` is behind again — `c3f9c56` is on the branch, and merging PR #3 closed it. The friend is on the branch so they're fine, but if you want `main` current, that needs a new PR or a direct merge. Say the word and I'll open one.
+
+Nothing's broken — labelling is **gated on purpose**. The button is greyed out and says `confirm the corpus first`.
+
+The model proposed `India` / `other` for that document but nobody has agreed yet, so `start_labelling` refuses (409). Click **confirm** on the `India` badge and the button lights up.
+
+That gate is deliberate: claims are keyed by corpus, so labelling before someone checks the grouping means writing 1,783 claims under a subject nobody verified — and the whole point of the corpus layer is that two files about the same entity land in the same group.
+
+---
+
+## But the screenshot shows a real problem
+
+Look at the values: `Global Inflation → 118`, `Domestic Inflation → 120`, `Balance of Payments → 104`. Those aren't measurements. **That's the table of contents, and the "value" is a page number.**
+
+They'll get labelled, because the prefilter matches `row_label` against target metrics by substring and `"inflation"` is one of them ([label.py:217](label.py:217)). So:
+
+- ~40s of GPU each, on rows that can never be a fact
+- claims written as *inflation = 118* and *inflation = 120*
+- both under `india|inflation`, differing, no qualifiers → adjudicated as a **contradiction** between two page numbers
+
+That's the same false-positive class as the 37 I fixed earlier, from a new source.
+
+## The fix
+
+Contents rows have a clean generic signature — `row_label` is identical to the line text, and the value is a bare integer with no unit, currency or decimal. Rejecting those at mining time costs a few lines and no document-specific rules.
+
+It needs a re-mine on their machine (`/remine` on the document), not a re-label, so it's cheap — but it's your call whether to interrupt their run. Want me to write it?
+
+Either way, **confirm the corpus first** so you can see labelling actually work; the prefilter change can land before the long run.
+
+---
+
+## Turn 53 — 2026-09-08 16:35
+
+**Me:**
+
+> bro explain shortly how the regex initial digestion works? cuz its ass
+
+*[Claude ran 2 tools: Bash ×2]*
+
+**Claude:**
+
+Short version — it's four steps, all geometry, no model:
+
+```
+PyMuPDF words (x,y boxes)
+  → _bands()      rows: words within 3pt of the same y
+  → _cells()      columns: split a row where the x-gap > 8pt
+  → classify_row() is this row a basis band, a period band, or data?
+  → NUMBER regex  every figure in a data row, + the label text left of it
+  → _reject_reason()  drop the junk
+```
+
+`_reject_reason` ([extract.py:140](extract.py:140)) is the entire quality bar, and it's five rules:
+
+| rule | drops |
+|---|---|
+| no row label | numbers floating with no words |
+| bare year | `2024` with no ₹ or unit |
+| unqualified small number | **≤2 digits**, no currency, no unit |
+| cross-reference | preceded by `note`/`section`/`clause` |
+| identifier | preceded by `DIN`/`CIN`/`GSTIN`… |
+
+## Why it's ass
+
+**It's default-accept.** Anything that is *a number with words next to it* gets in unless one of those five fires. There's no positive test that it's a measurement.
+
+Your contents page proves it. `Global Inflation 118`:
+
+- has a label ✓
+- not a year ✓
+- **3 digits**, so `unqualified small number` (≤2) doesn't fire ✗
+- no `note`/`section` prefix ✓
+- no `DIN`/`CIN` ✓
+
+→ accepted. A page number becomes evidence. Bump that rule to ≤3 digits and you'd start dropping real figures like `EPS 4.2` or `margin 118 bps`, so the digit count isn't the lever.
+
+The real lever is that a bare integer with **no currency and no unit** is almost never a financial measurement — `match.group("currency")` and `match.group("unit")` are already captured and already ignored except for numbers ≤2 digits. Widening `qualified` from a tiebreaker into a requirement is a two-line change, with an escape hatch for rows whose *label* carries the unit (`Revenue (₹ crore)`).
+
+That's the fix I offered last turn. Want it?
+
+---
+
+## Turn 54 — 2026-09-08 16:36
+
+**Me:**
+
+> wwhat is the fix?
+
+*[Claude ran 15 tools: Bash ×7, Edit ×7, Read ×1]*
+
+**Claude:**
+
+Here it is. A number is a measurement only if something states its unit — on the figure, its label, its column, its statement, or the table's units caption:
+
+Now wire the caption band through the mining loop, alongside the existing basis and period bands:
+
+Now the check — the contents row from your screenshot, and the four cases that must survive:
+
+Now measure the real cost on the actual documents:
+
+The fix, in three parts:
+
+**1. A number needs a unit from somewhere** — [extract.py:140](extract.py:140)
+
+```python
+qualified = bool(match.group("currency") or match.group("unit")
+                 or UNIT_HINT.search(stated_in or ""))
+...
+if not qualified:
+    return "no unit stated for this figure"
+```
+
+`stated_in` is the row label + column header + statement heading + units caption. So `Revenue (₹ in millions) … 81,415.38` survives via its label, `Real GDP growth (per cent) … 7.2` via its label, a figure under `(₹ in crores)` via the caption. `Global Inflation … 118` has a unit in none of those places, so it goes.
+
+**2. A units caption is a band, like the ones already there**
+
+The basis band (`Consolidated`) and period band (`March 31, 2024`) already work this way — a header row that owns the rows beneath it until the next statement. `(₹ in millions)` is the same shape, so it's the same mechanism:
+
+```python
+elif unit_caption(text, cells):
+    caption = text.strip()
+```
+
+**3. Rejected ≠ deleted**
+
+Those rows are still mined, still stored, still visible under the `rejected` filter with `no unit stated for this figure` on them. They're only kept away from the labeller. If the rule turns out too aggressive, `/remine` reverses it — no re-labelling, no model calls.
+
+Self-checks cover the two contents rows from your screenshot plus the four rescue paths; `python extract.py && python label.py && python verdict.py` all pass.
+
+---
+
+**The number I can't give you yet:** I'm running old-vs-new across all six starter PDFs to see what this costs in real recall — it's still going. I'll report accepted-evidence and labelworthy counts per document when it lands. If it turns out to cut real figures, the caption band is the knob, not the rule.
+
+Not committed until you've seen that number.
 
 ---

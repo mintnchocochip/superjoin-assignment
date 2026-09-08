@@ -24,6 +24,7 @@ import difflib
 import json
 import os
 import re
+import sys
 import urllib.error
 import urllib.request
 
@@ -293,27 +294,50 @@ def _prompt(row):
     )
 
 
-def label_one(row, model=None, timeout=180):
-    """Return grounded label fields for one evidence row, or None if the model failed."""
+def _generate(prompt, model=None, timeout=180):
+    """One constrained generation. Returns (parsed, error); exactly one is None."""
     body = json.dumps(
         {
             "model": model or MODEL,
             "system": SYSTEM,
-            "prompt": _prompt(row),
+            "prompt": prompt,
             "stream": False,
             "think": False,
             "format": SCHEMA,
             "options": {"temperature": 0, "num_ctx": NUM_CTX},
         }
     ).encode("utf-8")
-
     req = urllib.request.Request(
         f"{HOST}/api/generate", data=body, headers={"Content-Type": "application/json"}
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            out = json.loads(json.load(resp)["response"])
-    except (urllib.error.URLError, json.JSONDecodeError, KeyError, TimeoutError):
+            return json.loads(json.load(resp)["response"]), None
+    except urllib.error.HTTPError as exc:
+        return None, f"HTTP {exc.code}: {exc.read().decode('utf-8', 'replace')[:200]}"
+    except (urllib.error.URLError, TimeoutError) as exc:
+        return None, f"{type(exc).__name__}: {exc}"
+    except (json.JSONDecodeError, KeyError) as exc:
+        return None, f"unparseable response: {type(exc).__name__}: {exc}"
+
+
+def probe(model=None):
+    """One real generation, to fail fast with the actual reason.
+
+    /api/tags answering does not mean the model loads. A corrupt or unloadable
+    blob returns HTTP 500 per request, and a labelling run that swallows that
+    looks exactly like a labelling run that is merely slow - which cost an hour
+    of watching a counter sit at zero.
+    """
+    _, err = _generate("SOURCE LINE: Total income 1\nCANDIDATE NUMBER: 1", model, timeout=60)
+    return err
+
+
+def label_one(row, model=None, timeout=180):
+    """Return grounded label fields for one evidence row, or None if the model failed."""
+    out, err = _generate(_prompt(row), model, timeout)
+    if err:
+        print(f"label_one failed on {row.get('id')}: {err}", file=sys.stderr)
         return None
 
     out = ground(out, provided_text(row))

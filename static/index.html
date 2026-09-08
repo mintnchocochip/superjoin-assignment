@@ -226,11 +226,12 @@ $('#label').onclick = async () => {
   $('#label').disabled = true;
   const r = await (await fetch(`/api/documents/${current}/label`, { method: 'POST' })).json();
   if (r.detail) { $('#lstat').textContent = r.detail; $('#label').disabled = false; return; }
-  $('#lstat').textContent = `labelling with ${r.model}…`;
+  $('#lstat').textContent = `${r.calls} calls for ${r.pending} rows in scope · ${r.model}`;
   const poll = setInterval(async () => {
     await loadDocs();
     const d = (await (await fetch('/api/documents')).json()).find(x => x.id === current);
     $('#lstat').textContent = `${d.labelled} labelled · ${d.facts} facts`;
+    if (d.labelled >= r.pending) { clearInterval(poll); $('#label').disabled = false; }
     await loadRows();
   }, 4000);
   setTimeout(() => { clearInterval(poll); $('#label').disabled = false; }, 600000);

@@ -172,8 +172,13 @@ async def upload(file: UploadFile = File(...)):
     }
 
 
-def _label_batch(doc_id, limit):
-    """Label unlabelled evidence for a document. Writes only to `claims`."""
+def _pending(doc_id):
+    """Unlabelled evidence for a document that could actually reach a finding.
+
+    The prefilter runs here rather than in SQL because it is fuzzy. Pulling ten
+    thousand rows out of SQLite costs milliseconds; forty seconds of model time
+    on a row that can never be compared to anything costs the afternoon.
+    """
     with db() as conn:
         rows = [
             dict(r)
@@ -182,10 +187,16 @@ def _label_batch(doc_id, limit):
                 " JOIN documents d ON d.id = e.doc_id"
                 " LEFT JOIN claims c ON c.evidence_id = e.id"
                 " WHERE e.doc_id = ? AND e.accepted = 1 AND c.id IS NULL"
-                " ORDER BY e.pdf_page LIMIT ?",
-                (doc_id, limit),
+                " ORDER BY e.pdf_page",
+                (doc_id,),
             )
         ]
+    return [r for r in rows if labeller.worth_labelling(r, r["subject"])]
+
+
+def _label_batch(doc_id, limit):
+    """Label pending evidence for a document. Writes only to `claims`."""
+    rows = _pending(doc_id)
     if not rows:
         return 0
 
@@ -203,12 +214,13 @@ def _label_batch(doc_id, limit):
         )
         groups.setdefault(key, []).append(row)
 
+    batch = list(groups.values())[:limit]
     with ThreadPoolExecutor(max_workers=WORKERS) as pool:
-        labelled = list(pool.map(labeller.label_one, [g[0] for g in groups.values()]))
+        labelled = list(pool.map(labeller.label_one, [g[0] for g in batch]))
 
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     claims = []
-    for members, out in zip(groups.values(), labelled):
+    for members, out in zip(batch, labelled):
         if out is None:
             continue
         for row in members:
@@ -235,11 +247,24 @@ def _label_batch(doc_id, limit):
 
 
 @app.post("/api/documents/{doc_id}/label")
-def start_labelling(doc_id: str, tasks: BackgroundTasks, limit: int = 200):
+def start_labelling(doc_id: str, tasks: BackgroundTasks, limit: int = 400):
     if not labeller.available():
-        raise HTTPException(503, "Ollama is not reachable at " + labeller.HOST)
+        raise HTTPException(503, f"Ollama is not reachable at {labeller.HOST}")
+    # /api/tags answering is not proof the model loads. Ask it to generate once,
+    # so a bad model fails here with its own message instead of silently
+    # producing an empty run.
+    if err := labeller.probe():
+        raise HTTPException(503, f"{labeller.MODEL} cannot generate - {err}")
+    pending = _pending(doc_id)
+    calls = len({(r["section"], r["row_label"], r["text"]) for r in pending if r["kind"] == "number"})
+    calls += sum(1 for r in pending if r["kind"] == "text")
     tasks.add_task(_label_batch, doc_id, limit)
-    return {"started": True, "limit": limit, "model": labeller.MODEL}
+    return {
+        "started": True,
+        "model": labeller.MODEL,
+        "pending": len(pending),
+        "calls": min(calls, limit),
+    }
 
 
 @app.get("/api/documents")

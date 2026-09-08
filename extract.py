@@ -43,6 +43,23 @@ PERIOD_CELL = re.compile(
 
 REFERENCE = re.compile(r"\b(note|notes|clause|section|schedule|annexure|para)\s*$", re.IGNORECASE)
 
+# Anything that says what a figure is measured in. A measurement states its unit
+# somewhere - on the figure, its row label, its column header, the statement
+# heading, or the "(₹ in millions)" caption above the table. A page number in a
+# table of contents states one nowhere, which is what separates the two.
+UNIT_HINT = re.compile(
+    r"₹|Rs\.?|INR|US\$|\$|%|per\s*cent|percent|\bcrores?\b|\blakhs?\b|\bmillions?\b|"
+    r"\bbillions?\b|\bthousands?\b|\bmn\b|\bbn\b|\bbps\b|basis\s*points|"
+    r"\btonnes?\b|\bkg\b|\bunits?\b|\bshares?\b|\bdays?\b|\bx\b",
+    re.IGNORECASE,
+)
+
+# A caption that states the units for the table below it, e.g. "(₹ in millions)".
+# Short, no figures of its own, and it owns rows until the next statement.
+def unit_caption(text, cells):
+    return (len(text) <= 60 and UNIT_HINT.search(text)
+            and not any(NUMERIC_CELL.match(c[2].strip()) for c in cells))
+
 # Registration and certificate numbers sit on lines full of words, so the label
 # rules wave them through unless they are named explicitly.
 IDENTIFIER = re.compile(
@@ -137,9 +154,20 @@ def _spanning_owner(cell, spans):
     return min(spans, key=lambda s: abs(centre - (s[0] + s[1]) / 2))[2]
 
 
-def _reject_reason(row_text, match, label):
+def _reject_reason(row_text, match, label, stated_in=""):
+    """Why this figure is not evidence, or None if it is.
+
+    `stated_in` is everything around the figure that could name its unit: the row
+    label, the column header, the statement heading, the units caption above the
+    table. Requiring a unit from *somewhere* is what keeps a contents page out -
+    "Global Inflation ... 118" has a label, is not a year, and is three digits, so
+    every earlier rule waves it through and a page number becomes a measurement.
+    Figures rejected here are still stored and still visible; they are only kept
+    away from the labeller, and re-mining reverses it.
+    """
     digits = match.group("value").replace(",", "")
-    qualified = bool(match.group("currency") or match.group("unit"))
+    qualified = bool(match.group("currency") or match.group("unit")
+                     or UNIT_HINT.search(stated_in or ""))
 
     if not label:
         return "no row label"
@@ -147,6 +175,8 @@ def _reject_reason(row_text, match, label):
         return "bare year"
     if not qualified and len(digits.replace(".", "")) <= 2:
         return "unqualified small number"
+    if not qualified:
+        return "no unit stated for this figure"
     if REFERENCE.search(row_text[: match.start()]):
         return "cross-reference, not a quantity"
     if IDENTIFIER.search(row_text[: match.start()]):
@@ -191,7 +221,7 @@ def mine(pdf_path, doc_id):
         for pdf_page, page in enumerate(doc):
             rows = list(_bands(page))
             printed = _printed_page(rows)
-            row_label, headers, bases = None, [], []
+            row_label, headers, bases, caption = None, [], [], None
             # The statement heading a row sits under. It is what states the
             # consolidation basis, so it has to reach the labeller as quotable text.
             section, context = None, deque(maxlen=3)
@@ -215,7 +245,9 @@ def mine(pdf_path, doc_id):
                 if STATEMENT.search(text):
                     section = text.strip()
                     # A new statement invalidates the column layout above it.
-                    headers, bases = [], []
+                    headers, bases, caption = [], [], None
+                elif unit_caption(text, cells):
+                    caption = text.strip()
 
                 # A band naming consolidations owns the columns beneath it until
                 # the next statement; a band of period names is the column header
@@ -240,8 +272,11 @@ def mine(pdf_path, doc_id):
                     if NUMERIC_CELL.match(cell[2].strip())
                 ]
                 for cell, (start, end) in numeric:
+                    header = _header_for(cell, headers)
+                    stated_in = " ".join(
+                        p for p in (row_label, header, section, caption) if p)
                     for match in NUMBER.finditer(cell[2]):
-                        reason = _reject_reason(text, match, row_label)
+                        reason = _reject_reason(text, match, row_label, stated_in)
                         yield {
                             "kind": "number",
                             "row_no": row_no,
@@ -251,7 +286,7 @@ def mine(pdf_path, doc_id):
                             "row_label": row_label,
                             "section": section,
                             "context": "\n".join(context),
-                            "col_header": _header_for(cell, headers),
+                            "col_header": header,
                             "col_basis": _spanning_owner(cell, bases),
                             "value": match.group("value"),
                             "currency": (match.group("currency") or "").strip(),
@@ -370,5 +405,30 @@ if __name__ == "__main__":
     # One spanning header owns everything beneath it.
     assert _spanning_owner(data[1], [(200.0, 400.0, "Consolidated")]) == "Consolidated"
     assert _spanning_owner(data[1], []) is None
+
+    # A figure needs a unit from somewhere. The contents page that started this:
+    # "Global Inflation .... 118" has a label, is not a year, and is three digits,
+    # so every other rule waves it through and a page number becomes a claim.
+    def verdict(text, label, stated_in=""):
+        return _reject_reason(text, NUMBER.search(text), label, stated_in)
+
+    assert verdict("Global Inflation 118", "Global Inflation") == \
+        "no unit stated for this figure"
+    assert verdict("Domestic Inflation 120", "Domestic Inflation") is not None
+
+    # ...and the four places a unit can be stated must each rescue it.
+    assert verdict("Revenue 81,415.38", "Revenue", "Revenue (₹ in millions)") is None
+    assert verdict("Real GDP 7.2", "Real GDP", "Real GDP growth (per cent)") is None
+    assert verdict("Revenue 81,415.38", "Revenue", "Year ended March 31, 2024 ₹ mn") is None
+    assert verdict("Revenue 81,415.38", "Revenue", "(₹ in crores)") is None
+    # A unit on the figure itself still stands alone.
+    assert verdict("Margin 14.2%", "Margin") is None
+    assert verdict("Revenue ₹ 81,415.38", "Revenue") is None
+
+    # The caption band: short, unit-bearing, no figures of its own.
+    assert unit_caption("(₹ in millions)", [(60.0, 140.0, "(₹ in millions)")])
+    assert not unit_caption("Revenue from operations", [(60.0, 140.0, "Revenue")])
+    assert not unit_caption("Revenue ₹ 81,415.38", [(60.0, 90.0, "Revenue"),
+                                                    (185.0, 228.0, "81,415.38")])
 
     print("extract self-check ok")

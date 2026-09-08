@@ -4,6 +4,7 @@ facts.db
 __pycache__/
 .venv/
 .env
+.env.*
 deploy/secrets/
 deploy/tls/
 deploy/.env*

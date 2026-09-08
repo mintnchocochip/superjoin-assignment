@@ -45,6 +45,24 @@ Useful flags:
 labelled evidence is skipped, so a second run resumes rather than restarting or
 duplicating.
 
+**Clone it, do not copy the folder.** `.env` is generated per machine and holds
+two things that describe *that* machine: `MONGO_URI`, which embeds an absolute
+path to the TLS CA, and sometimes `OLLAMA_HOST`. Both are now repaired
+automatically on the next run - the URI is rewritten every time, and a silent
+`OLLAMA_HOST` falls back to Ollama's default port - but a copied `.env` also
+carries the other machine's generated passwords, and nothing can tell those apart
+from yours. `rm .env` before the first run if the folder arrived by copy.
+
+**MongoDB image.** The compose file pins `mongo:7` via `${MONGO_IMAGE:-mongo:7}`.
+MongoDB 8.0+ vendors a TCMalloc that violates the kernel's rseq ABI, and mongod
+refuses to start on Linux kernels 6.19 through 7.0.13 - the range Ubuntu 26.04
+ships ([SERVER-121912](https://jira.mongodb.org/browse/SERVER-121912)). 7.x
+predates it and has everything used here. Override if you want a different build:
+
+```bash
+MONGO_IMAGE=mongo:8.0.4 bash deploy/bootstrap.sh
+```
+
 **Budget the time.** Mining is about a second per 100-page PDF. Labelling is
 roughly 40 seconds per model call and around 1,500 calls across the six starter
 documents, so a full run wants a GPU and a few hours. `--limit 40` gives a

@@ -100,7 +100,7 @@ msh() {
     -e MONGO_APP_USER -e MONGO_APP_PASSWORD \
     -e MONGO_READONLY_USER -e MONGO_READONLY_PASSWORD -e MONGO_DB \
     mongo1 mongosh --quiet --tls \
-      --tlsCAFile /etc/mongo/tls/ca.crt --tlsAllowInvalidHostnames \
+      --tlsCAFile /tls-ca.crt --tlsAllowInvalidHostnames \
       -u "$MONGO_ROOT_USER" -p "$MONGO_ROOT_PASSWORD" \
       --authenticationDatabase admin "$@"
 }
@@ -110,10 +110,29 @@ echo "==> starting three mongod nodes"
 $COMPOSE up -d
 
 echo "==> waiting for mongo1 to accept authenticated connections"
+ready=""
 for _ in $(seq 1 60); do
-  msh --eval 'db.adminCommand("ping")' >/dev/null 2>&1 && break
+  if msh --eval 'db.adminCommand("ping")' >/dev/null 2>&1; then ready=yes; break; fi
   sleep 2
 done
+
+# Without this the script pressed on to rs.initiate and reported "container is
+# restarting", which is a symptom of the failure rather than the failure. mongod
+# has already written the real reason to its own log by this point.
+if [ -z "$ready" ]; then
+  echo
+  echo "mongo1 never became ready. Its last lines:" >&2
+  ${DOCKER:-docker} logs --tail 25 facts-mongo1 2>&1 | sed 's/^/    /' >&2
+  echo >&2
+  echo "If that mentions a keyfile or certificate it could not read, the volumes" >&2
+  echo "are from an older attempt - clear them and re-run:" >&2
+  echo "    $COMPOSE down -v" >&2
+  echo >&2
+  echo "If it mentions a Linux kernel incompatibility, this image will not run on" >&2
+  echo "this kernel at all. Pick one that does and re-run:" >&2
+  echo "    $COMPOSE down -v && MONGO_IMAGE=mongo:8.0.4 bash deploy/bootstrap.sh" >&2
+  exit 1
+fi
 
 # Members are named by their container hostnames, which is what lets each node
 # recognise itself and reach its peers. The cost is that a driver on the host
@@ -154,10 +173,17 @@ if command -v cygpath >/dev/null 2>&1; then
 fi
 URI="mongodb://${MONGO_APP_USER}:${MONGO_APP_PASSWORD}@localhost:27017/${MONGO_DB}?directConnection=true&tls=true&tlsCAFile=${CA_PATH}&tlsAllowInvalidHostnames=true&authSource=${MONGO_DB}"
 
-if ! grep -q '^MONGO_URI=' "$ENV_FILE"; then
-  printf 'MONGO_URI=%s\n' "$URI" >> "$ENV_FILE"
-  echo "==> wrote MONGO_URI to $ENV_FILE"
-fi
+# Rewritten on every run rather than kept, because it embeds an absolute path to
+# the CA on *this* machine. A project folder copied from another one - which is
+# how this gets handed to whoever has the faster GPU - would otherwise carry a
+# tlsCAFile that does not exist here, and every driver connection would fail at
+# the TLS handshake long after setup reported success. mongosh runs inside the
+# container against its own copy, so it never notices.
+grep -v '^MONGO_URI=' "$ENV_FILE" > "$ENV_FILE.new" || true
+printf 'MONGO_URI=%s\n' "$URI" >> "$ENV_FILE.new"
+mv "$ENV_FILE.new" "$ENV_FILE"
+chmod 600 "$ENV_FILE"
+echo "==> wrote MONGO_URI to $ENV_FILE"
 
 echo
 echo "Replica set rs0 is up on 27017/27018/27019. TLS required, RBAC on."

@@ -15,17 +15,40 @@
 
 name: superjoin-facts
 
+# MongoDB 8.0+ vendors a TCMalloc that violates the kernel's rseq ABI, and mongod
+# refuses to start at all on Linux kernels 6.19 through 7.0.13 - which is what
+# Ubuntu 26.04 ships. It is not a crash to work around; mongod checks the kernel
+# version and exits (SERVER-121912).
+#
+# 7.x predates the offending TCMalloc and is unaffected, and it has everything
+# used here: replica sets, keyfile auth, TLS, and pipeline $lookup. Override with
+# MONGO_IMAGE if you want a different build - mongo:8.0.4 is also reported to
+# work, while 8.2.x is not.
+#
+#     MONGO_IMAGE=mongo:8.0.4 bash deploy/bootstrap.sh
+
 x-mongod: &mongod
-  image: mongo:8
+  image: ${MONGO_IMAGE:-mongo:7}
   restart: unless-stopped
-  # mongod refuses a keyfile it considers world-readable, and a file bind-mounted
-  # from NTFS arrives 0777 no matter what the host says. Compose `configs` would
-  # be the tidy answer but it ignores uid/gid/mode outside swarm. So: copy it in
-  # and set the mode where the filesystem can express one.
+  # Every secret is copied in and re-owned before mongod starts, because bind
+  # mounts land differently on different hosts and mongod is strict about both
+  # directions:
+  #
+  #   too open   - it refuses a keyfile others can read, and a file bind-mounted
+  #                from NTFS arrives 0777 whatever the host says
+  #   too closed - the TLS key is 0400 owned by the host user, and on Linux, where
+  #                bind mounts DO enforce permissions, mongod has already dropped
+  #                to uid 999 and cannot read it. That crash-loops the container.
+  #
+  # Docker Desktop hides the second case by ignoring permissions altogether, so it
+  # only appears on Linux. Compose `configs` would be tidier but it ignores
+  # uid/gid/mode outside swarm.
   entrypoint:
     - bash
     - -c
     - install -m 400 -o mongodb -g mongodb /etc/mongo/secrets/keyfile /keyfile
+      && install -m 400 -o mongodb -g mongodb /etc/mongo/tls/server.pem /tls-server.pem
+      && install -m 444 -o mongodb -g mongodb /etc/mongo/tls/ca.crt /tls-ca.crt
       && exec docker-entrypoint.sh "$$@"
     - bash
   command: >
@@ -34,8 +57,8 @@ x-mongod: &mongod
       --bind_ip_all
       --keyFile /keyfile
       --tlsMode requireTLS
-      --tlsCertificateKeyFile /etc/mongo/tls/server.pem
-      --tlsCAFile /etc/mongo/tls/ca.crt
+      --tlsCertificateKeyFile /tls-server.pem
+      --tlsCAFile /tls-ca.crt
       --tlsAllowConnectionsWithoutCertificates
   extra_hosts:
     - "host.docker.internal:host-gateway"
@@ -44,7 +67,7 @@ x-mongod: &mongod
     MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?set in .env}
   healthcheck:
     test: >
-      mongosh --quiet --tls --tlsCAFile /etc/mongo/tls/ca.crt
+      mongosh --quiet --tls --tlsCAFile /tls-ca.crt
         --tlsAllowInvalidHostnames
         --eval "db.adminCommand('ping').ok" || exit 1
     interval: 10s

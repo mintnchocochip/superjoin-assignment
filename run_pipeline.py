@@ -197,12 +197,50 @@ def install_ollama():
         script.unlink(missing_ok=True)
 
 
+DEFAULT_OLLAMA = "http://127.0.0.1:11434"
+
+
+def retune_ollama_host():
+    """Fall back to Ollama's own default port when the configured one is dead.
+
+    OLLAMA_HOST only ends up in .env to work around Windows, where 11434 sits
+    inside a reserved TCP range Hyper-V claims once Docker Desktop starts. That
+    value describes one machine. A project folder copied to another - which is
+    how this gets handed to whoever has the faster GPU - carries it along, and
+    the receiving Linux box then probes port 12345 forever while a perfectly
+    healthy Ollama answers on 11434.
+
+    So: if the configured host is silent and the default is not, believe the
+    default and drop the stale line, since the uvicorn process reads .env too.
+    """
+    import label as labeller
+
+    if labeller.available() or labeller.HOST == DEFAULT_OLLAMA:
+        return
+    stale, labeller.HOST = labeller.HOST, DEFAULT_OLLAMA
+    if not labeller.available():
+        labeller.HOST = stale
+        return
+
+    say(f"==> Ollama is on {DEFAULT_OLLAMA}, not {stale} (a stale OLLAMA_HOST,")
+    say("    probably from a .env copied off another machine); correcting .env")
+    os.environ["OLLAMA_HOST"] = DEFAULT_OLLAMA
+    env = ROOT / ".env"
+    kept = [ln for ln in env.read_text(encoding="utf-8").splitlines()
+            if not ln.startswith("OLLAMA_HOST=")]
+    env.write_text("\n".join(kept) + "\n", encoding="utf-8")
+
+
 def ensure_ollama_running():
     """The Linux installer registers a systemd service; start it if it is idle."""
     import label as labeller
 
     if labeller.available():
         return
+    retune_ollama_host()
+    if labeller.available():
+        return
+
     if LINUX and have("systemctl"):
         say("==> starting the Ollama service")
         quiet(["sudo", "systemctl", "enable", "--now", "ollama"])
@@ -215,6 +253,10 @@ def ensure_ollama_running():
         if labeller.available():
             return
         time.sleep(2)
+
+    # systemd starts ollama with its own environment, not this one, so a service
+    # asked to move ports comes up on 11434 regardless. Check there before dying.
+    retune_ollama_host()
 
 
 def provision(assume_yes):
@@ -232,13 +274,53 @@ def provision(assume_yes):
     install_ollama()
 
 
+def fix_line_endings():
+    """Rewrite CRLF shell scripts to LF.
+
+    This repo is developed on Windows, and git will hand a checkout CRLF endings
+    unless told otherwise. bash then reads the carriage return as part of the
+    line and `set -euo pipefail` fails with "set: pipefail: invalid option name",
+    which says nothing about the actual cause. .gitattributes prevents it for new
+    clones; this repairs the ones that already exist, since asking someone to
+    re-clone over an invisible byte is not a fix.
+    """
+    for script in sorted((ROOT / "deploy").glob("*.sh")):
+        raw = script.read_bytes()
+        if b"\r\n" in raw:
+            say(f"    normalising line endings in {script.name}")
+            script.write_bytes(raw.replace(b"\r\n", b"\n"))
+
+
+def posix_bash():
+    """A real POSIX bash, not the WSL launcher.
+
+    On a default Windows install `where bash` finds C:\\Windows\\System32\\bash.exe,
+    which is the WSL shim: it would run bootstrap.sh inside a Linux distro that
+    has no Docker, no project at that path, and no visible connection to the
+    error you get. Git for Windows ships the shell we actually want, but only
+    puts git.exe on PATH, so look for it where it lives.
+    """
+    candidates = [shutil.which("bash")]
+    if os.name == "nt":
+        candidates += [rf"{root}\Git\bin\bash.exe" for root in
+                       (os.environ.get("ProgramFiles", r"C:\Program Files"),
+                        os.environ.get("ProgramFiles(x86)", ""),
+                        os.environ.get("LOCALAPPDATA", "") + r"\Programs")]
+    for path in candidates:
+        if path and "System32" not in path and os.path.exists(path):
+            return path
+    return None
+
+
 def start_database():
     """Bring up the replica set. bootstrap.sh is idempotent, so this is cheap."""
     say("==> starting MongoDB replica set")
-    bash = shutil.which("bash")
+    fix_line_endings()
+    bash = posix_bash()
     if not bash:
         die("bash is not available",
-            "On Windows, run this from Git Bash. bootstrap.sh needs a POSIX shell.")
+            "On Windows, install Git for Windows - bootstrap.sh needs a POSIX shell."
+            if os.name == "nt" else "Install bash, then re-run.")
     env = dict(os.environ, DOCKER=" ".join(DOCKER))
     if run([bash, "deploy/bootstrap.sh"], env=env).returncode:
         die("deploy/bootstrap.sh failed", "Its output above says why.")
@@ -264,9 +346,10 @@ def ensure_model():
 
     if not labeller.available():
         die(f"Ollama is not answering at {labeller.HOST}",
-            "Start it with `ollama serve`. On Windows the default port 11434 can "
-            "fall inside a reserved range once Docker is running - if it refuses "
-            "to bind, run `OLLAMA_HOST=127.0.0.1:12345 ollama serve` and put "
+            "Start it with: sudo systemctl restart ollama" if LINUX else
+            "Start it with `ollama serve`. If it refuses to bind, port 11434 is "
+            "inside a reserved range Hyper-V claims once Docker Desktop starts - "
+            "run `OLLAMA_HOST=127.0.0.1:12345 ollama serve` and put "
             "OLLAMA_HOST=127.0.0.1:12345 in .env.")
 
     if labeller.MODEL not in labeller.available():

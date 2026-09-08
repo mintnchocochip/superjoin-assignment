@@ -46,7 +46,17 @@ def _host(raw):
 
 HOST = _host(os.environ.get("OLLAMA_HOST"))
 MODEL = os.environ.get("OLLAMA_MODEL", "qwen3:4b")
-NUM_CTX = 4096
+# One call carries a section header, a row label, a source line and three lines of
+# context - a few hundred tokens, so 4096 was never the binding constraint on
+# quality. It is the binding constraint on how much of a GPU a run can use: the
+# KV cache is num_ctx x however many requests Ollama serves in parallel, so a card
+# holding a 5GB model and nothing else stays idle. Raise this and OLLAMA_NUM_PARALLEL
+# together; a bigger OLLAMA_MODEL is the other way to spend the same VRAM.
+NUM_CTX = int(os.environ.get("OLLAMA_NUM_CTX", "16384"))
+
+# Ollama unloads after five minutes by default, and reloading the model between
+# documents costs more than the labelling does.
+KEEP_ALIVE = os.environ.get("OLLAMA_KEEP_ALIVE", "30m")
 
 GROUNDED = ("metric", "period", "basis", "vintage", "scope")
 IDENTITY = ("subject", "doc_type")
@@ -65,32 +75,39 @@ BASES = {"consolidated", "standalone"}
 VINTAGES = {"audited", "provisional", "restated", "unaudited"}
 
 # Property order is load-bearing: it is the order the model generates in.
-SCHEMA = {
-    "type": "object",
-    "properties": {
-        "metric": {"type": ["string", "null"]},
-        "metric_evidence": {"type": ["string", "null"]},
-        "unit": {"type": ["string", "null"], "enum": sorted(UNITS) + [None]},
-        "period": {"type": ["string", "null"]},
-        "period_evidence": {"type": ["string", "null"]},
-        "basis": {"type": ["string", "null"], "enum": sorted(BASES) + [None]},
-        "basis_evidence": {"type": ["string", "null"]},
-        "vintage": {"type": ["string", "null"], "enum": sorted(VINTAGES) + [None]},
-        "vintage_evidence": {"type": ["string", "null"]},
-        "scope": {"type": ["string", "null"]},
-        "scope_evidence": {"type": ["string", "null"]},
-        "is_fact": {"type": "boolean"},
-        "confidence": {"type": "number"},
-    },
-    # The evidence fields must be required. Left optional, the model simply omits
-    # them, and then every field fails grounding and the validator drops a
-    # perfectly good label. Asking for the quote is what makes the check possible.
-    "required": [
-        "metric", "metric_evidence", "unit", "period", "period_evidence",
-        "basis", "basis_evidence", "vintage", "vintage_evidence",
-        "scope", "scope_evidence", "is_fact", "confidence",
-    ],
-}
+#
+# metric_key is an enum and metric is free text, on purpose. Grouping keys off the
+# enum, so "Revenue from operations", "Total income" and "Revenue" reach the same
+# group instead of three groups of one - which is what left corroboration finding
+# almost nothing. metric keeps the document's own wording for display.
+def _schema(metric_keys):
+    return {
+        "type": "object",
+        "properties": {
+            "metric": {"type": ["string", "null"]},
+            "metric_evidence": {"type": ["string", "null"]},
+            "metric_key": {"type": ["string", "null"], "enum": list(metric_keys) + [None]},
+            "unit": {"type": ["string", "null"], "enum": sorted(UNITS) + [None]},
+            "period": {"type": ["string", "null"]},
+            "period_evidence": {"type": ["string", "null"]},
+            "basis": {"type": ["string", "null"], "enum": sorted(BASES) + [None]},
+            "basis_evidence": {"type": ["string", "null"]},
+            "vintage": {"type": ["string", "null"], "enum": sorted(VINTAGES) + [None]},
+            "vintage_evidence": {"type": ["string", "null"]},
+            "scope": {"type": ["string", "null"]},
+            "scope_evidence": {"type": ["string", "null"]},
+            "is_fact": {"type": "boolean"},
+            "confidence": {"type": "number"},
+        },
+        # The evidence fields must be required. Left optional, the model simply omits
+        # them, and then every field fails grounding and the validator drops a
+        # perfectly good label. Asking for the quote is what makes the check possible.
+        "required": [
+            "metric", "metric_evidence", "metric_key", "unit", "period", "period_evidence",
+            "basis", "basis_evidence", "vintage", "vintage_evidence",
+            "scope", "scope_evidence", "is_fact", "confidence",
+        ],
+    }
 
 # The model writes these when it means null.
 NULLISH = {"", "none", "null", "unknown", "n/a", "na", "not stated", "not specified"}
@@ -104,11 +121,16 @@ Hard rules:
 1. Every "*_evidence" field must be copied verbatim from PROVIDED TEXT. If you cannot \
 copy a phrase that states it, the field is null. Do not reason it out, do not use \
 outside knowledge, do not guess from what is "usual".
-2. period, basis, vintage, scope are INDEPENDENT. A missing one is null, never filled \
+2. metric is the row's own wording. metric_key is the bucket it belongs to, chosen \
+from the fixed list the schema allows - it is what lets this figure be compared with \
+the same figure in another document, so choose the bucket that matches what the row \
+measures, "other" when it measures something real that no bucket fits, and null only \
+when metric itself is null.
+3. period, basis, vintage, scope are INDEPENDENT. A missing one is null, never filled \
 by inference from the others.
-3. Output the JSON keys in the exact order given by the schema. Decide metric first; \
+4. Output the JSON keys in the exact order given by the schema. Decide metric first; \
 decide is_fact and confidence last.
-4. is_fact = false when the number is a page/note reference, a date or year, a \
+5. is_fact = false when the number is a page/note reference, a date or year, a \
 registration or identifier number, a table-of-contents entry, or the line states no \
 measurable fact.
 
@@ -121,7 +143,7 @@ PROVIDED TEXT:
   (Rs. in crore) Year ended March 31, 2024 Year ended March 31, 2023
 CANDIDATE: 8,142
 {"metric":"revenue_from_operations","metric_evidence":"Revenue from operations",\
-"unit":"INR_crore","period":"year ended March 31, 2024",\
+"metric_key":"revenue","unit":"INR_crore","period":"year ended March 31, 2024",\
 "period_evidence":"Year ended March 31, 2024","basis":"consolidated",\
 "basis_evidence":"Consolidated Statement of Profit and Loss","vintage":null,\
 "vintage_evidence":null,"scope":null,"scope_evidence":null,"is_fact":true,\
@@ -131,17 +153,72 @@ PROVIDED TEXT:
   Notes to the financial statements (contd.)
   refer note 34 for related party transactions
 CANDIDATE: 34
-{"metric":null,"metric_evidence":null,"unit":null,"period":null,"period_evidence":null,\
-"basis":null,"basis_evidence":null,"vintage":null,"vintage_evidence":null,"scope":null,\
-"scope_evidence":null,"is_fact":false,"confidence":0.98}
+{"metric":null,"metric_evidence":null,"metric_key":null,"unit":null,"period":null,\
+"period_evidence":null,"basis":null,"basis_evidence":null,"vintage":null,\
+"vintage_evidence":null,"scope":null,"scope_evidence":null,"is_fact":false,\
+"confidence":0.98}
 
 PROVIDED TEXT:
   Total income 9,001
 CANDIDATE: 9,001
-{"metric":"total_income","metric_evidence":"Total income","unit":null,"period":null,\
-"period_evidence":null,"basis":null,"basis_evidence":null,"vintage":null,\
+{"metric":"total_income","metric_evidence":"Total income","metric_key":"revenue",\
+"unit":null,"period":null,"period_evidence":null,"basis":null,"basis_evidence":null,"vintage":null,\
 "vintage_evidence":null,"scope":null,"scope_evidence":null,"is_fact":true,\
 "confidence":0.6}"""
+
+# Prose gets its own instructions. Handed the numeric SYSTEM above, a text row
+# arrives as "CANDIDATE NUMBER: (none)" and the model does the consistent thing
+# with a prompt that opens "You label a single number": it returns is_fact false
+# and every field null. The mining already yields these rows and worth_labelling
+# already keeps them; only the instruction was missing.
+TEXT_SYSTEM = """You label a single sentence that has already been extracted from a \
+financial or economic document. You do NOT summarise the document or add anything it \
+does not say. Your job is to say what that sentence asserts about the SUBJECT, using \
+ONLY the text provided.
+
+Hard rules:
+1. Every "*_evidence" field must be copied verbatim from PROVIDED TEXT. If you cannot \
+copy a phrase that states it, the field is null. Do not reason it out, do not use \
+outside knowledge, do not guess from what is "usual".
+2. metric names WHAT IS ASSERTED, in snake_case, from the sentence's own words: \
+director_appointment, volume_growth_guidance, acquisition, dividend_declared, \
+capacity_expansion. Not a summary of the sentence, and never a metric the sentence \
+does not state.
+3. metric_key is the kind of event that is, chosen from the fixed list the schema \
+allows - it is what lets this sentence be read alongside the same kind of statement \
+elsewhere. "other" when the sentence asserts something real that no listed kind fits, \
+null only when metric itself is null.
+4. period, basis, vintage, scope are INDEPENDENT. A missing one is null, never filled \
+by inference from the others. unit is null here - a sentence carries no number.
+5. Output the JSON keys in the exact order given by the schema. Decide metric first; \
+decide is_fact and confidence last.
+6. is_fact = false when the sentence asserts nothing checkable about the subject: a \
+heading, a table-of-contents line, boilerplate, a definition, a page footer, or a \
+statement about someone other than the subject.
+
+Examples:
+
+PROVIDED TEXT:
+  Directors' Report
+  Mr. Sandeep Kumar Barasia was appointed as Executive Director and Chief Business \
+Officer of the Company with effect from May 20, 2022.
+SUBJECT: Delhivery Limited
+{"metric":"director_appointment","metric_evidence":"was appointed as Executive \
+Director and Chief Business Officer","metric_key":"appointment","unit":null,\
+"period":"May 20, 2022",\
+"period_evidence":"with effect from May 20, 2022","basis":null,"basis_evidence":null,\
+"vintage":null,"vintage_evidence":null,"scope":"Executive Director and Chief Business \
+Officer","scope_evidence":"Executive Director and Chief Business Officer",\
+"is_fact":true,"confidence":0.9}
+
+PROVIDED TEXT:
+  Notes to the financial statements
+  The accompanying notes form an integral part of these financial statements.
+SUBJECT: Delhivery Limited
+{"metric":null,"metric_evidence":null,"metric_key":null,"unit":null,"period":null,\
+"period_evidence":null,"basis":null,"basis_evidence":null,"vintage":null,\
+"vintage_evidence":null,"scope":null,"scope_evidence":null,"is_fact":false,\
+"confidence":0.95}"""
 
 # A fiscal year in these filings is stated as its closing date.
 FY_END = re.compile(r"(?:march|mar)\s*31,?\s*((?:19|20)\d{2})", re.IGNORECASE)
@@ -224,6 +301,19 @@ TARGETS = {
 }
 TERMS = tuple(sorted({t for group in TARGETS.values() for t in group}, key=len, reverse=True))
 
+# What a sentence can be about. The numeric buckets are metrics; these are events,
+# and they exist for the same reason: two documents describing the same kind of
+# thing about one company have to land in one group to be read against each other.
+EVENT_KEYS = [
+    "appointment", "departure", "acquisition", "divestment", "guidance",
+    "dividend", "capacity_expansion", "launch", "approval", "policy_change",
+    "other",
+]
+
+METRIC_KEYS = sorted(TARGETS) + ["other"]
+SCHEMA = _schema(METRIC_KEYS)
+TEXT_SCHEMA = _schema(EVENT_KEYS)
+
 # Prose is worth labelling only when something happened to somebody. Everything
 # else on these pages is disclaimer, boilerplate and navigation.
 EVENTS = (
@@ -232,6 +322,12 @@ EVENTS = (
     "guidance", "expects", "expected to", "outlook", "projected", "forecast",
     "approved", "declared", "commissioned", "launched", "stake in",
 )
+
+# The whitelist above is a spend decision, not a correctness one. It exists because
+# forty seconds of model time on a figure nothing can be compared against is forty
+# seconds wasted - which stops being true on a card with headroom to spare.
+# LABEL_ALL=1 labels every mined row that names anything, listed or not.
+LABEL_ALL = os.environ.get("LABEL_ALL", "").lower() not in ("", "0", "false", "no")
 
 NOISE = re.compile(r"[^a-z ]+")
 
@@ -270,11 +366,14 @@ def worth_labelling(row, subject=""):
     if not row.get("accepted"):
         return False
     if row["kind"] == "number":
-        return target_metric(row.get("row_label")) is not None
+        if target_metric(row.get("row_label")) is not None:
+            return True
+        # Still needs a label: a figure with nothing naming it is a page number.
+        return LABEL_ALL and bool(_bare(row.get("row_label")))
     bare = _bare(row.get("text"))
     if not bare:
         return False
-    if any(verb in bare for verb in EVENTS):
+    if LABEL_ALL or any(verb in bare for verb in EVENTS):
         return True
     # A subject named in prose is worth a look even without an event verb.
     words = [w for w in _bare(subject).split() if len(w) > 3]
@@ -312,6 +411,15 @@ def ground(out, source, fields=GROUNDED):
 
 
 def _prompt(row):
+    if row.get("kind") == "text":
+        return (
+            f"SUBJECT (given):        {row.get('subject') or 'unknown'}\n"
+            f"SECTION HEADER (given): {row.get('section') or 'none'}\n\n"
+            f"SENTENCE:               {row['text']}\n"
+            f"CONTEXT (3 lines up):\n{row.get('context') or 'none'}\n\n"
+            "PROVIDED TEXT = SECTION HEADER + SENTENCE + CONTEXT. Quote only from these."
+        )
+
     known_period = period_from(row.get("col_header"))
     known = known_basis(row)
     value = " ".join(x for x in (row.get("currency"), row.get("value"), row.get("unit")) if x)
@@ -340,6 +448,7 @@ def _generate(prompt, model=None, timeout=180, system=None, schema=None):
             "stream": False,
             "think": False,
             "format": schema or SCHEMA,
+            "keep_alive": KEEP_ALIVE,
             "options": {"temperature": 0, "num_ctx": NUM_CTX},
         }
     ).encode("utf-8")
@@ -430,9 +539,29 @@ def probe(model=None):
     return err
 
 
+def metric_key_for(row, out):
+    """The bucket this claim groups under - the thing that decides what it can be
+    compared with. Deterministic where the row label settles it, the model's enum
+    next, its own wording last.
+
+    "other" is deliberately not a bucket. Every unlisted figure would land in one
+    group and adjudicate against everything else in it, which is worse than not
+    grouping at all; falling through to the wording at least puts two rows that
+    say the same thing together.
+    """
+    if row.get("kind") != "text" and (key := target_metric(row.get("row_label"))):
+        return key
+    key = _norm(out.get("metric_key"))
+    if key and key not in NULLISH and key != "other":
+        return key
+    return _bare(out.get("metric")).replace(" ", "_")
+
+
 def label_one(row, model=None, timeout=180):
     """Return grounded label fields for one evidence row, or None if the model failed."""
-    out, err = _generate(_prompt(row), model, timeout)
+    text_row = row.get("kind") == "text"
+    system, schema = (TEXT_SYSTEM, TEXT_SCHEMA) if text_row else (SYSTEM, SCHEMA)
+    out, err = _generate(_prompt(row), model, timeout, system=system, schema=schema)
     if err:
         print(f"label_one failed on {row.get('id')}: {err}", file=sys.stderr)
         return None
@@ -446,7 +575,13 @@ def label_one(row, model=None, timeout=180):
         "subject": row.get("subject") or "",  # given by the document, never inferred
         "metric": out.get("metric") or "",
         "metric_evidence": out.get("metric_evidence") or "",
-        "period": period_from(row.get("col_header")) or out.get("period") or "",
+        "metric_key": metric_key_for(row, out),
+        # Canonical on both paths. A column header gives FY2024 and the model, told
+        # to quote, gives "year ended March 31, 2024" - and two claims stating the
+        # same period in two spellings read as a difference, which turns a
+        # corroboration into a "reconcilable: one covers X, the other Y".
+        "period": (period_from(row.get("col_header")) or period_from(out.get("period"))
+                   or out.get("period") or ""),
         "basis": known_basis(row) or out.get("basis") or "",
         "basis_evidence": out.get("basis_evidence") or "",
         "vintage": out.get("vintage") or "",
@@ -529,6 +664,10 @@ if __name__ == "__main__":
     assert period_from("March 31, 2023") == "FY2023"
     assert period_from("Q4 FY24") == "Q4-FY2024"
     assert period_from("Total") is None
+    # The model quotes the page; the header is parsed. Both must land on one
+    # spelling or a corroboration reads as a difference in period.
+    assert period_from("year ended March 31, 2024") == period_from("March 31, 2024")
+    assert period_from("FY2024") == "FY2024"
     assert basis_from("Consolidated Statement of Profit and Loss") == "consolidated"
     assert basis_from("Revenue from operations") is None
 
@@ -538,4 +677,59 @@ if __name__ == "__main__":
     assert known_basis({"section": heading, "col_basis": "Standalone"}) == "standalone"
     assert known_basis({"section": heading, "col_basis": None}) == "consolidated"
     assert known_basis({"section": None, "col_basis": None}) is None
+
+    # The group key. A row label the whitelist recognises settles it without the
+    # model; "revenue from operations" and "total income" are one bucket, which is
+    # the whole point - three groups of one corroborate nothing.
+    number = {"kind": "number", "row_label": "Revenue from operations"}
+    assert metric_key_for(number, {"metric_key": "expenses"}) == "revenue"
+    assert metric_key_for({"kind": "number", "row_label": "Total income"},
+                          {"metric_key": None}) == "revenue"
+
+    # Unlisted label: the model's bucket, then its own wording. Never "other" -
+    # that would pile every unrelated figure into one group and adjudicate them
+    # against each other.
+    unlisted = {"kind": "number", "row_label": "Rubber waste"}
+    assert metric_key_for(unlisted, {"metric_key": "volume"}) == "volume"
+    assert metric_key_for(unlisted, {"metric_key": "other",
+                                     "metric": "Rubber waste sold"}) == "rubber_waste_sold"
+    assert metric_key_for(unlisted, {"metric_key": None, "metric": None}) == ""
+
+    # Prose never consults the numeric whitelist - it has no row label to match.
+    assert metric_key_for({"kind": "text"}, {"metric_key": "appointment"}) == "appointment"
+
+    # LABEL_ALL widens the prefilter and nothing else: an unlisted row label is
+    # labelled, a figure with no label at all is still skipped.
+    globals()["LABEL_ALL"] = True
+    assert worth_labelling({"accepted": True, "kind": "number", "row_label": "Rubber waste"})
+    assert not worth_labelling({"accepted": True, "kind": "number", "row_label": None})
+    assert worth_labelling(
+        {"accepted": True, "kind": "text", "text": "This presentation is for information"})
+    assert not worth_labelling({"accepted": False, "kind": "number", "row_label": "Total income"})
+    globals()["LABEL_ALL"] = False
+
+    # Prose and figures take different instructions; a text row must not be asked
+    # to label a number that is not there.
+    assert "single sentence" in TEXT_SYSTEM
+    assert "CANDIDATE NUMBER" not in _prompt({"kind": "text", "text": "x", "subject": "y"})
+    assert "CANDIDATE NUMBER" in _prompt({"kind": "number", "text": "x", "value": "1"})
     print("label self-check ok")
+
+    # The half that needs a model. Skipped when Ollama is not up, so the offline
+    # check above still runs anywhere; on the GPU box this is the one that proves
+    # a sentence comes back labelled rather than blank.
+    if MODEL in available():
+        prose = label_one({
+            "id": "selfcheck", "kind": "text", "subject": "Delhivery Limited",
+            "section": "Directors' Report", "row_label": None, "col_header": None,
+            "value": None, "currency": "", "unit": "",
+            "text": "Mr. Sandeep Kumar Barasia was appointed as Executive Director and "
+                    "Chief Business Officer of the Company with effect from May 20, 2022.",
+            "context": "Changes in Directors and Key Managerial Personnel",
+        }, timeout=300)
+        assert prose, "the model failed outright - run probe() for the reason"
+        assert prose["is_fact"], prose
+        assert prose["metric"], prose
+        print(f"live text check ok: {prose['metric']} <- {prose['metric_evidence']!r}")
+    else:
+        print(f"live text check skipped: {MODEL} not loaded at {HOST}")

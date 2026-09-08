@@ -17,6 +17,7 @@ explained.
     python run_pipeline.py --yes           # same, no confirmation prompts
     python run_pipeline.py --limit 50      # cap model calls per document
     python run_pipeline.py --pdfs some/dir # ingest a different folder
+    python run_pipeline.py --relabel       # drop claims and label again from scratch
     python run_pipeline.py --restore f.zip # load a dump someone sent back
     python run_pipeline.py --setup-only    # install everything, then drive the UI
     python run_pipeline.py --dump-only     # zip up whatever is in the database
@@ -451,6 +452,21 @@ def confirm_corpora(assume_yes):
         say(f"      -> {corpus['_id']}")
 
 
+def clear_claims():
+    """Drop every claim and group so labelling starts from scratch.
+
+    A claim is keyed by evidence id and skipped when one already exists, which is
+    what makes a run resumable - and also what makes a prompt change invisible
+    until the old claims are gone. Evidence is untouched: nothing is re-mined,
+    only re-labelled.
+    """
+    import store
+
+    claims = store.db().claims.delete_many({}).deleted_count
+    groups = store.db().claim_groups.delete_many({}).deleted_count
+    say(f"==> cleared {claims} claims and {groups} groups; labelling starts over")
+
+
 def label_documents(limit):
     import app
     import store
@@ -565,6 +581,8 @@ def main():
                         help="accept every proposed corpus without asking")
     parser.add_argument("--restore", metavar="ZIP",
                         help="load a dump instead of running the pipeline")
+    parser.add_argument("--relabel", action="store_true",
+                        help="drop existing claims first, so changed prompts take effect")
     parser.add_argument("--skip-setup", action="store_true",
                         help="assume dependencies, database and model are ready")
     parser.add_argument("--setup-only", action="store_true",
@@ -605,6 +623,9 @@ def main():
             "When you are done, write the dump with:\n"
             f"    {sys.executable} run_pipeline.py --dump-only")
         return
+
+    if args.relabel:
+        clear_claims()
 
     ingest_documents(args.pdfs)
     confirm_corpora(args.yes)

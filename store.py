@@ -370,7 +370,11 @@ def upsert_claims(claims):
     written = 0
     for claim in claims:
         doc = dict(claim)
-        doc["group_key"] = group_key(doc.get("corpus_id"), doc.get("metric"))
+        # The bucket, not the wording. A group keyed on what the model happened to
+        # call the row put "revenue from operations", "total income" and "revenue"
+        # in three groups of one, and a group of one corroborates nothing.
+        doc["group_key"] = group_key(doc.get("corpus_id"),
+                                     doc.get("metric_key") or doc.get("metric"))
         coll.replace_one({"evidence_id": doc["evidence_id"]}, doc, upsert=True)
         written += 1
     return written
@@ -396,11 +400,15 @@ def set_corpus(doc_id, corpus_id, doc_type=None, confirmed=True):
         claims.update_many({"doc_id": doc_id}, {"$set": {"doc_type": doc_type}})
 
     # Re-key only what has a metric; a claim with none never had a key.
-    for claim in claims.find({"doc_id": doc_id, "metric": {"$nin": [None, ""]}},
-                             {"metric": 1}):
+    for claim in claims.find(
+        {"doc_id": doc_id,
+         "$or": [{"metric_key": {"$nin": [None, ""]}}, {"metric": {"$nin": [None, ""]}}]},
+        {"metric": 1, "metric_key": 1},
+    ):
         claims.update_one(
             {"_id": claim["_id"]},
-            {"$set": {"group_key": group_key(corpus_id, claim["metric"])}})
+            {"$set": {"group_key": group_key(
+                corpus_id, claim.get("metric_key") or claim.get("metric"))}})
 
     sync_groups()
     return db().claims.count_documents({"doc_id": doc_id})
@@ -422,7 +430,9 @@ def sync_groups(doc_id=None):
             "_id": "$group_key",
             "corpus_id": {"$first": "$corpus_id"},
             "subject": {"$first": "$subject"},
-            "metric": {"$first": "$metric"},
+            # The group is named by its bucket, which every member shares by
+            # construction. A member's own wording stays on the member.
+            "metric": {"$first": {"$ifNull": ["$metric_key", "$metric"]}},
             "members": {"$addToSet": "$_id"},
             "docs": {"$addToSet": "$doc_id"},
             # Recorded so a future peer query can ask for one document type

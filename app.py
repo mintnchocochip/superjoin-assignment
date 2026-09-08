@@ -34,8 +34,11 @@ import store  # noqa: E402
 
 UPLOADS = ROOT / "uploads"
 
-# Ollama is VRAM-bound; more than a handful of concurrent requests thrashes.
-WORKERS = 4
+# Ollama is VRAM-bound; more than a handful of concurrent requests thrashes. Four
+# suits a card that just fits the model. On a bigger one this is the knob that
+# turns spare VRAM into throughput, and it only helps if the server is allowed to
+# serve that many at once: set OLLAMA_NUM_PARALLEL to the same number.
+WORKERS = int(os.environ.get("LABEL_WORKERS", "4"))
 
 app = FastAPI(title="Fact Knowledge Layer")
 

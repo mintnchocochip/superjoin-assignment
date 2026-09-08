@@ -297,10 +297,9 @@ loadDocs(); loadRows();
   document.querySelectorAll('[data-reassign]').forEach(b =>
     b.onclick = async () => {
       const known = (await (await fetch('/api/corpora')).json()).map(c => c.name);
-      const name = prompt('Entity this document is about:' +
-        (known.length ? '
-
-existing: ' + known.join(', ') : ''), '');
+      const name = prompt(
+        'Entity this document is about.' +
+        (known.length ? ' Existing: ' + known.join(', ') : ''), '');
       if (name) await assignCorpus(b.dataset.reassign, name);
     });
 

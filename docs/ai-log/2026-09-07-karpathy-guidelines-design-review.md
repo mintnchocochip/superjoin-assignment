@@ -1,6 +1,6 @@
 # Karpathy guidelines design review
 
-Session `3623c6ed` · 54 turns
+Session `3623c6ed` · 55 turns
 
 ## Turn 1 — 2026-09-07 13:25
 
@@ -3620,5 +3620,41 @@ Self-checks cover the two contents rows from your screenshot plus the four rescu
 **The number I can't give you yet:** I'm running old-vs-new across all six starter PDFs to see what this costs in real recall — it's still going. I'll report accepted-evidence and labelworthy counts per document when it lands. If it turns out to cut real figures, the caption band is the knob, not the rule.
 
 Not committed until you've seen that number.
+
+---
+
+## Turn 55 — 2026-09-08 16:44
+
+**Me:**
+
+> Commit the working tree changes with a sensible message.
+
+*[Claude ran 8 tools: Bash ×8]*
+
+**Claude:**
+
+The extract.py diff is entirely mine. But the tree also contains changes I didn't write — let me look before I put a message on them:
+
+Committing as four separate commits, because most of this isn't my work and shouldn't share a message:
+
+Already done — a parallel session committed the tree while I was reviewing it. Nothing left to commit.
+
+## What landed
+
+| commit | contents | mine? |
+|---|---|---|
+| `8f28109` | Require a figure to state its unit — the contents-page fix | **yes** |
+| `5f5ea71` | `metric_key` bucket in the schema + `store.upsert_claims` keying groups on it; separate prose prompt | no |
+| `052053f` | AI transparency log | no |
+
+`8f28109` is the extraction change I just wrote, committed by the other session under essentially the message I'd have used. All four self-checks pass against the combined tree.
+
+## Two things you should know
+
+**A parallel session is editing this working tree.** `app.py`, `label.py`, `store.py` and `run_pipeline.py` changed under me during this turn — the `LABEL_WORKERS` knob, `--relabel`, and the `metric_key` work. That's ~700 lines I didn't write and haven't reviewed. Coherent and in the same voice, so probably your other session, but worth knowing before you treat this branch as reviewed.
+
+**My before/after measurement is invalid — ignore it.** It reported accepted evidence going *up* 62%, which my change cannot do: it only adds a reject rule. The baseline was `git show HEAD:extract.py` from a moment when the tree already held the other session's work, so it compared two moving targets. The recall cost of requiring a unit is still unmeasured. I'd want a clean run before trusting the rule on the macro documents, where captions like `(per cent)` carry more of the load than in the filings.
+
+Nothing is pushed — all three commits are local. Want them pushed?
 
 ---

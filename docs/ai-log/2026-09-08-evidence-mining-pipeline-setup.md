@@ -1,6 +1,6 @@
 # Evidence mining pipeline setup
 
-Session `a9891da4` · 4 turns
+Session `a9891da4` · 5 turns
 
 ## Turn 1 — 2026-09-08 14:48
 
@@ -234,5 +234,51 @@ LABEL_WORKERS=8 python run_pipeline.py --relabel --yes
 with `OLLAMA_NUM_PARALLEL=8` on the *server* side. If the card is 8GB, drop both to 4 and set `OLLAMA_NUM_CTX=8192` — spilling to CPU would cost you more than the parallelism buys.
 
 Want me to commit this to `evidence-mining-and-labelling` and push, so you can pull it on the Ubuntu box? Say the word and it's done in one command.
+
+---
+
+## Turn 5 — 2026-09-08 16:45
+
+**Me:**
+
+> yes commit and push
+
+*[Claude ran 7 tools: Bash ×7]*
+
+**Claude:**
+
+Pushed — three commits on `evidence-mining-and-labelling`:
+
+| | |
+|---|---|
+| `8f28109` | Require a figure to state its unit somewhere (your extract.py work, was uncommitted) |
+| `5f5ea71` | Group claims by metric bucket, prose gets its own prompt |
+| `052053f` | Update the AI transparency log |
+
+On the Ubuntu box:
+
+```bash
+git pull origin evidence-mining-and-labelling
+```
+
+Then, before you start the long run, two things that will otherwise cost you the night:
+
+```bash
+grep -E 'OLLAMA_HOST|tlsCAFile' .env
+```
+
+That `.env` was copied from the Windows box, so it likely still says `OLLAMA_HOST=127.0.0.1:12345` (systemd Ollama listens on **11434**) and `tlsCAFile=A:/...` (a path that doesn't exist on Linux). Fix both before running — that's the same failure that stopped your first setup.
+
+Then the five-minute sanity pass, then the real thing:
+
+```bash
+python label.py && python run_pipeline.py --relabel --yes --limit 5
+```
+
+```bash
+LABEL_WORKERS=8 python run_pipeline.py --relabel --yes
+```
+
+~3,184 calls, roughly 4.5 hours at 8-way parallel. Check the findings after the `--limit 5` pass and ping me if the labels still look wrong — there's time to iterate on the prompt before you commit to the full run.
 
 ---

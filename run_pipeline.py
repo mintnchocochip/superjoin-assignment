@@ -232,9 +232,27 @@ def provision(assume_yes):
     install_ollama()
 
 
+def fix_line_endings():
+    """Rewrite CRLF shell scripts to LF.
+
+    This repo is developed on Windows, and git will hand a checkout CRLF endings
+    unless told otherwise. bash then reads the carriage return as part of the
+    line and `set -euo pipefail` fails with "set: pipefail: invalid option name",
+    which says nothing about the actual cause. .gitattributes prevents it for new
+    clones; this repairs the ones that already exist, since asking someone to
+    re-clone over an invisible byte is not a fix.
+    """
+    for script in sorted((ROOT / "deploy").glob("*.sh")):
+        raw = script.read_bytes()
+        if b"\r\n" in raw:
+            say(f"    normalising line endings in {script.name}")
+            script.write_bytes(raw.replace(b"\r\n", b"\n"))
+
+
 def start_database():
     """Bring up the replica set. bootstrap.sh is idempotent, so this is cheap."""
     say("==> starting MongoDB replica set")
+    fix_line_endings()
     bash = shutil.which("bash")
     if not bash:
         die("bash is not available",

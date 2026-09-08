@@ -1,0 +1,15 @@
+# Shell scripts must reach Linux with LF endings. This repo is developed on
+# Windows, where git happily rewrites LF to CRLF on checkout - and a bootstrap.sh
+# carrying \r fails on Ubuntu with "set: pipefail: invalid option name", because
+# bash reads the carriage return as part of the option.
+* text=auto eol=lf
+
+*.sh    text eol=lf
+*.py    text eol=lf
+*.js    text eol=lf
+*.yml   text eol=lf
+*.html  text eol=lf
+*.md    text eol=lf
+
+*.pdf   binary
+*.zip   binary

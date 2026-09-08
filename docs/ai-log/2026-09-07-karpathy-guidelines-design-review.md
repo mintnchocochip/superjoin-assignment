@@ -1,6 +1,6 @@
 # Karpathy guidelines design review
 
-Session `3623c6ed` · 32 turns
+Session `3623c6ed` · 33 turns
 
 ## Turn 1 — 2026-09-07 13:25
 
@@ -2102,5 +2102,63 @@ The corpus layer, the grounding validator, and the `not_comparable` rules — th
 That matters because Approach is explicitly graded, and a reviewer comparing the diagram to `store.py` will find they disagree. Say the word and I'll bring it in line — it's documentation, so it needs no hardware and doesn't touch the run your friend will do.
 
 Still open from earlier, unchanged: `main` is 14 commits behind this branch, the Ubuntu provisioning path has never executed on Ubuntu, and no cross-document finding exists yet because no metric overlaps between labelled documents — though the Economic Survey and IMF report now sit in the same `India` corpus, which is the setup one needs.
+
+---
+
+## Turn 33 — 2026-09-08 13:53
+
+**Me:**
+
+> <create-pr-command>
+> ## Overview
+>
+> Create a pull request for the changes in this session, ready for review (not a draft).
+>
+> ## Steps
+>
+> 1. Check for uncommitted changes. If any exist, stage and commit them with a message that describes what changed and why.
+> 2. Push the branch to the remote.
+> 3. Open the PR with `gh pr create`. Do not pass `--draft`: the user chose “Create PR”, not “Create draft PR”, for this request, and that explicit choice overrides any saved memory, standing instruction, or earlier plan to open it as a draft. When the target below names a base branch and that branch exists on origin (`git ls-remote --heads origin <base>`), pass it with `--base`; otherwise leave `--base` off and let gh infer it. Write a title that summarizes the change and a body that covers what changed, why, and anything a reviewer should know. If the repo has a PR template, follow it.
+> 4. Report the PR URL when done. Wrap the URL in a `<pr-created>` tag on its own line so the UI can render a live status card, like this: `<pr-created>https://github.com/owner/repo/pull/123</pr-created>`
+>
+> If a PR already exists for this branch, push any new commits and report the existing URL wrapped in the same `<pr-created>` tag instead of creating a duplicate, and leave that PR's draft or ready state as it is.
+>
+> ## Target
+>
+> Repository: mintnchocochip/superjoin-assignment
+> Branch: evidence-mining-and-labelling
+> Base branch: main
+> Working directory: A:\superjoin-proj
+> </create-pr-command>
+
+*[Claude ran 10 tools: Bash ×10]*
+
+**Claude:**
+
+No existing PR, `main` exists. Committing the transparency log — running its own redaction check first, since that's what it's for.
+
+PR is open and not a draft — but `commits: 1` doesn't match a branch that's well ahead of `main`. Checking.
+
+Everything else was already merged via PR #2 while I was working. So PR #3 contains **one commit**, and the body I wrote describes work that isn't in its diff. Correcting it.
+
+`gh pr edit` tripped a GraphQL deprecation and didn't apply. Retrying via the API directly.
+
+Path mismatch — Git Bash's `/tmp` isn't Windows' `\tmp`. Writing it from Python directly.
+
+PR is open, not a draft, based on `main`.
+
+<pr-created>https://github.com/mintnchocochip/superjoin-assignment/pull/3</pr-created>
+
+**Heads up on what's actually in it:** one commit, touching only `docs/ai-log/`.
+
+While I was working, **everything else from this session was already merged into `main` via PR #2** — the corpus layer, verdicts and findings, the consolidation-band extraction fix, the portable runner, and the UI progress work. `origin/main` sits at `e9aa03b`, which is that merge, so `main` was only one commit behind this branch by the time I got here.
+
+I initially wrote a PR body describing all of that work, then caught that its diff contained none of it and rewrote the title and body to match reality. A PR body describing changes that aren't in the diff would have wasted a reviewer's time.
+
+Before committing the log I ran its own redaction check — `python tools/export_transcript.py --check` reports **clean**, so no unredacted identifiers or local paths reached the output.
+
+Two small friction points worth knowing: `gh pr edit` silently failed on a Projects-classic GraphQL deprecation, so I patched via `gh api` instead; and Git Bash's `/tmp` doesn't resolve for Windows Python, which is why the first attempt errored.
+
+Still outstanding, unchanged: the README's Approach section contradicts the code it now sits alongside on `main` — three collections vs five, evidence embedded vs its own collection, `qwen2.5:7b` vs `qwen3:4b`. That section is explicitly graded, so it's the highest-value thing left. Happy to bring it in line whenever you want.
 
 ---

@@ -127,6 +127,10 @@ if [ -z "$ready" ]; then
   echo "If that mentions a keyfile or certificate it could not read, the volumes" >&2
   echo "are from an older attempt - clear them and re-run:" >&2
   echo "    $COMPOSE down -v" >&2
+  echo >&2
+  echo "If it mentions a Linux kernel incompatibility, this image will not run on" >&2
+  echo "this kernel at all. Pick one that does and re-run:" >&2
+  echo "    $COMPOSE down -v && MONGO_IMAGE=mongo:8.0.4 bash deploy/bootstrap.sh" >&2
   exit 1
 fi
 

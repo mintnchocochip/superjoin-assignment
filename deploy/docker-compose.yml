@@ -15,8 +15,20 @@
 
 name: superjoin-facts
 
+# MongoDB 8.0+ vendors a TCMalloc that violates the kernel's rseq ABI, and mongod
+# refuses to start at all on Linux kernels 6.19 through 7.0.13 - which is what
+# Ubuntu 26.04 ships. It is not a crash to work around; mongod checks the kernel
+# version and exits (SERVER-121912).
+#
+# 7.x predates the offending TCMalloc and is unaffected, and it has everything
+# used here: replica sets, keyfile auth, TLS, and pipeline $lookup. Override with
+# MONGO_IMAGE if you want a different build - mongo:8.0.4 is also reported to
+# work, while 8.2.x is not.
+#
+#     MONGO_IMAGE=mongo:8.0.4 bash deploy/bootstrap.sh
+
 x-mongod: &mongod
-  image: mongo:8
+  image: ${MONGO_IMAGE:-mongo:7}
   restart: unless-stopped
   # Every secret is copied in and re-owned before mongod starts, because bind
   # mounts land differently on different hosts and mongod is strict about both

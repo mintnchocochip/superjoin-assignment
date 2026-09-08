@@ -1,1 +1,5 @@
 starter-datasets.zip
+uploads/
+facts.db
+__pycache__/
+.venv/

@@ -161,7 +161,7 @@ You got **two** datasets of three PDFs, not one. That's a gift for the assignmen
 
 > i need to keep a track of all the prompts and response i am giving claude ffor transperancy
 
-*[Claude ran 18 tools: Bash ×14, AskUserQuestion ×1, Write ×1, ToolSearch ×1, ExitPlanMode ×1]*
+*[Claude ran 25 tools: Bash ×21, AskUserQuestion ×1, Write ×1, ToolSearch ×1, ExitPlanMode ×1]*
 
 **Claude:**
 
@@ -180,5 +180,37 @@ Turn count differs from my earlier baseline (karpathy: 3 vs 2). Verifying rather
 Not a bug — turn 3 (`give me a system architecture for the same`) landed in that session after my baseline scan. Now verifying redaction:
 
 Content intact, identifiers gone. Idempotency check:
+
+Two consecutive runs with no work between = no diff. Idempotent; the earlier delta was just this live session appending its own tool calls. Now the hook:
+
+Now the README section that turns this into a submission asset:
+
+Pushed. Built and verified:
+
+| File | What it is |
+|---|---|
+| [tools/export_transcript.py](tools/export_transcript.py) | 160 lines, stdlib only — renders Claude Code's existing JSONL transcripts to Markdown |
+| [.claude/settings.json](.claude/settings.json) | `Stop` hook, reruns the exporter after every turn |
+| [docs/ai-log/](docs/ai-log/) | 2 sessions, 6 turns, plus an index |
+| [README.md](README.md) | assignment's required section skeleton + AI Transparency Log subsection |
+
+**Nothing captures prompts** — Claude Code already writes every session to `~/.claude/projects/`. This only renders what exists. That's the whole reason it's ~160 lines instead of a logging layer.
+
+Verification run:
+
+- `--check` → `check: clean`, exit 0
+- independent grep for `shawfighter|Shawf|23BCE|MANIKANDAN|K7 COMPUTING|Internship_` across the output → **zero hits**
+- Turn 1's requirements analysis survives intact — redaction didn't over-scrub
+- two consecutive runs with no work between → byte-identical output
+
+Two things worth knowing:
+
+**Your karpathy session has 3 turns, not the 2 I planned against.** You added *"give me a system architecture for the same"* to that session while I was working here. Not a bug — the exporter picked it up correctly — but it means both sessions are live and the log will keep absorbing both.
+
+**The hook fires on Stop, which is before this turn's final message is flushed.** So `docs/ai-log/` will always trail the current turn by one, then catch up. The exporter rewrites files in full, so it's self-healing; I chose not to special-case it.
+
+One deviation from what you picked, flagged in the plan and worth repeating: I **did not drop the bonafide-certificate turn**. That turn is the requirements analysis — the most useful thing in the log. The certificate only ever appeared inside a tool result, which this detail level doesn't render, so redacting the name, reg number, and employer address removes everything sensitive while keeping the content. Say the word if you'd still rather drop it wholesale.
+
+The hook is untested until your next turn — send anything and `git status` should show the log regenerated.
 
 ---

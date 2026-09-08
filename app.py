@@ -78,6 +78,17 @@ async def upload(file: UploadFile = File(...)):
     blob = await file.read()
     digest = hashlib.sha256(blob).hexdigest()
 
+    return ingest(blob, file.filename, digest)
+
+
+def ingest(blob, filename, digest=None):
+    """Store a PDF, mine it, and propose which corpus it belongs to.
+
+    A plain function rather than only an endpoint, so a batch runner can drive
+    the same path the API does instead of a second copy of it that drifts.
+    """
+    digest = digest or hashlib.sha256(blob).hexdigest()
+
     # A re-uploaded file would otherwise manufacture corroborations between a
     # document and its own copy once adjudication lands.
     existing = store.find_pdf_by_hash(digest)
@@ -85,11 +96,12 @@ async def upload(file: UploadFile = File(...)):
         return {"doc_id": existing["_id"], "duplicate": True}
 
     doc_id = uuid.uuid4().hex[:12]
+    UPLOADS.mkdir(exist_ok=True)
     path = UPLOADS / f"{doc_id}.pdf"
     path.write_bytes(blob)
 
     # Mining is regex over word positions: about a second for 100 pages, so it
-    # stays inline. Labelling is the slow half and runs in the background.
+    # stays inline. Labelling is the slow half and runs separately.
     pages, rows = extract.mine_document(path, doc_id)
 
     # Group before collecting. The model proposes which entity this document is
@@ -102,7 +114,7 @@ async def upload(file: UploadFile = File(...)):
 
     store.insert_pdf({
         "_id": doc_id,
-        "filename": file.filename,
+        "filename": filename,
         "sha256": digest,
         "page_count": pages,
         "uploaded_at": datetime.now(timezone.utc),
@@ -122,6 +134,7 @@ async def upload(file: UploadFile = File(...)):
         "corpus_id": corpus["_id"] if corpus else None,
         "corpus_name": corpus["name"] if corpus else None,
         "doc_type": identity.get("doc_type") or "other",
+        "proposed_subject": identity.get("subject") or "",
         "proposed_evidence": identity.get("subject_evidence") or "",
         "needs_confirmation": True,
     }

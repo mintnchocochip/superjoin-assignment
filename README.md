@@ -4,7 +4,70 @@ Fact knowledge layer for the Superjoin VIT 2026 engineering intern assignment.
 
 ## Setup and Run Instructions
 
-_TODO_
+Everything runs locally. No API keys, no paid services.
+
+**Prerequisites:** Python 3.10+, Docker Desktop (running), [Ollama](https://ollama.com),
+and a POSIX shell (Git Bash on Windows).
+
+```bash
+python run_pipeline.py
+```
+
+That one command installs the Python dependencies, brings up a three-node MongoDB
+replica set with TLS and RBAC, pulls the local model, ingests every PDF under
+`starter-datasets/`, asks you to confirm which entity each document is about,
+labels the evidence, adjudicates, and writes `factlayer-dump.zip`.
+
+Useful flags:
+
+| flag | effect |
+|---|---|
+| `--yes` | accept every proposed entity without asking |
+| `--limit N` | cap model calls per document, for a quick partial run |
+| `--pdfs DIR` | ingest a different folder |
+| `--skip-setup` | dependencies, database and model are already up |
+| `--restore FILE.zip` | load a dump instead of running anything |
+
+**It is safe to stop and re-run.** Claims are keyed by evidence id and already
+labelled evidence is skipped, so a second run resumes rather than restarting or
+duplicating.
+
+**Budget the time.** Mining is about a second per 100-page PDF. Labelling is
+roughly 40 seconds per model call and around 1,500 calls across the six starter
+documents, so a full run wants a GPU and a few hours. `--limit 40` gives a
+representative sample in minutes.
+
+### Running it on someone else's machine
+
+The labelling is the only slow part, and it is portable. Whoever has the faster
+GPU runs `python run_pipeline.py` and sends back `factlayer-dump.zip`; you load it
+with no model involved:
+
+```bash
+python run_pipeline.py --restore factlayer-dump.zip
+```
+
+The dump is JSONL per collection rather than `mongodump`, because the official
+MongoDB server image does not always ship the database tools and a dump you
+cannot produce on the machine holding the data is not a dump.
+
+### The web UI
+
+```bash
+python -m uvicorn app:app --port 8000
+```
+
+Upload PDFs, confirm each document's entity, inspect mined evidence with its
+source line and page, and read findings as two quotes side by side with the
+verdict between them.
+
+### Checks
+
+Three self-checks run without a database, a model, or a network:
+
+```bash
+python extract.py && python label.py && python verdict.py
+```
 
 ## Video Demo
 

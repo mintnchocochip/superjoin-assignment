@@ -7,3 +7,5 @@ __pycache__/
 deploy/secrets/
 deploy/tls/
 deploy/.env*
+factlayer-dump.zip
+dump/

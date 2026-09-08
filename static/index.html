@@ -59,6 +59,16 @@
     border-radius: 4px; padding: 1px 7px; font: inherit; font-size: 11.5px; cursor: pointer;
   }
   .corpus button:hover { border-color: var(--accent); color: var(--accent); }
+  .bar { height: 4px; border-radius: 3px; background: var(--line); margin-top: 7px; overflow: hidden; }
+  .bar > i { display: block; height: 100%; background: var(--accent); transition: width .4s; }
+  .stage {
+    display: flex; justify-content: space-between; gap: 8px; margin-top: 5px;
+    color: var(--accent); font-size: 11.5px;
+  }
+  .stage.failed { color: var(--warn); }
+  .stage b { font-weight: 600; }
+  @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .45 } }
+  .working { animation: pulse 1.4s ease-in-out infinite; }
 
   .controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
   input[type=text], input[type=number] {
@@ -214,12 +224,38 @@ function highlight(row) {
   return esc(text.slice(0, a)) + '<mark>' + esc(text.slice(a, b)) + '</mark>' + esc(text.slice(b));
 }
 
+const BUSY = ['queued', 'reading', 'storing evidence', 'identifying', 'labelling'];
+
+function progress(d) {
+  const state = d.state || '';
+  if (state === 'failed') {
+    return `<div class="stage failed"><b>failed</b><span>${esc(d.error || '')}</span></div>`;
+  }
+  if (!BUSY.includes(state)) return '';
+  const { done = 0, total = 0 } = d.progress || {};
+  const pct = total ? Math.round((done / total) * 100) : 0;
+  return `
+    <div class="stage working"><b>${esc(state)}…</b>
+      <span>${total ? `${done} / ${total}` : ''}</span></div>
+    <div class="bar"><i style="width:${total ? pct : 12}%"></i></div>`;
+}
+
+// Poll quickly while something is working, slowly when nothing is.
+let timer = null;
+function schedule(docs) {
+  clearTimeout(timer);
+  const busy = docs.some(d => BUSY.includes(d.state || ''));
+  timer = setTimeout(loadDocs, busy ? 1500 : 15000);
+}
+
 async function loadDocs() {
   const docs = await (await fetch('/api/documents')).json();
+  schedule(docs);
   $('#docs').innerHTML = docs.map(d => `
     <div class="doc ${d.id === current ? 'on' : ''}" data-id="${d.id}">
       <b>${esc(d.filename)}</b>
       <small>${d.page_count}p · ${d.accepted} evidence · ${d.labelled} labelled · ${d.facts} facts</small>
+      ${progress(d)}
       <div class="corpus">
         <span class="tag ${d.corpus_confirmed ? '' : 'pending'}">${
           esc(d.corpus_name || d.proposed_subject || 'unidentified')}</span>
@@ -305,8 +341,10 @@ loadDocs(); loadRows();
 
   // Grouping comes first: nothing is labelled under a corpus nobody confirmed.
   const doc = docs.find(d => d.id === current);
-  $('#label').disabled = !current || !(doc && doc.corpus_confirmed);
-  if (doc && !doc.corpus_confirmed) $('#lstat').textContent = 'confirm the corpus first';
+  const busy = doc && BUSY.includes(doc.state || '');
+  $('#label').disabled = !current || busy || !(doc && doc.corpus_confirmed);
+  if (doc && busy) $('#lstat').textContent = `${doc.state}…`;
+  else if (doc && !doc.corpus_confirmed) $('#lstat').textContent = 'confirm the corpus first';
 }
 
 async function loadRows() {
@@ -412,8 +450,7 @@ async function upload(f) {
     const r = await (await fetch('/api/documents', { method: 'POST', body })).json();
     $('#drop').innerHTML = r.duplicate
       ? 'Already uploaded — showing existing.'
-      : `Mined ${r.mined}, kept ${r.accepted}.<br>Proposed: ${
-          esc(r.corpus_name || 'unidentified')} — confirm to label.`;
+      : 'Reading it now — progress is on the left.';
     current = r.doc_id;
     await // --- findings -------------------------------------------------------------
 

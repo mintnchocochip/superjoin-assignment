@@ -177,6 +177,17 @@ def get_pdf(doc_id):
     return db().pdfs.find_one({"_id": doc_id})
 
 
+def set_doc(doc_id, **fields):
+    """Update a document's row. Used to publish progress while work is running.
+
+    Ingestion and labelling both take long enough that a UI showing nothing is
+    indistinguishable from a UI showing a hang, so each stage writes where it has
+    got to and the page reads it back.
+    """
+    fields["updated_at"] = datetime.now(timezone.utc)
+    db().pdfs.update_one({"_id": doc_id}, {"$set": fields})
+
+
 def insert_pdf(doc):
     try:
         db().pdfs.with_options(write_concern=_wc()).insert_one(doc)
@@ -229,6 +240,7 @@ def list_pdfs():
                         "page_count": 1, "uploaded_at": 1,
                         "corpus_id": 1, "corpus_confirmed": 1, "doc_type": 1,
                         "proposed_subject": 1, "proposed_evidence": 1,
+                        "state": 1, "progress": 1, "error": 1,
                         "corpus_name": {"$first": "$corpus.name"},
                         "accepted": {"$ifNull": [{"$first": "$ev.accepted"}, 0]},
                         "rejected": {"$ifNull": [{"$first": "$ev.rejected"}, 0]},

@@ -71,73 +71,108 @@ def models():
 
 
 @app.post("/api/documents")
-async def upload(file: UploadFile = File(...)):
+async def upload(tasks: BackgroundTasks, file: UploadFile = File(...)):
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(400, "Only PDF files are accepted")
 
     blob = await file.read()
     digest = hashlib.sha256(blob).hexdigest()
 
-    return ingest(blob, file.filename, digest)
+    doc_id, duplicate = register(blob, file.filename, digest)
+    if not duplicate:
+        # Returns straight away so the page can poll and draw progress. Mining is
+        # a second; identifying the document is a model call and can be most of a
+        # minute, which is far too long to leave an upload button spinning with
+        # nothing behind it.
+        tasks.add_task(process, doc_id)
+    return {"doc_id": doc_id, "duplicate": duplicate, "state": "queued"}
 
 
-def ingest(blob, filename, digest=None):
-    """Store a PDF, mine it, and propose which corpus it belongs to.
-
-    A plain function rather than only an endpoint, so a batch runner can drive
-    the same path the API does instead of a second copy of it that drifts.
-    """
+def register(blob, filename, digest=None):
+    """Record an upload and put its file on disk. Returns (doc_id, duplicate)."""
     digest = digest or hashlib.sha256(blob).hexdigest()
 
     # A re-uploaded file would otherwise manufacture corroborations between a
     # document and its own copy once adjudication lands.
     existing = store.find_pdf_by_hash(digest)
     if existing:
-        return {"doc_id": existing["_id"], "duplicate": True}
+        return existing["_id"], True
 
     doc_id = uuid.uuid4().hex[:12]
     UPLOADS.mkdir(exist_ok=True)
-    path = UPLOADS / f"{doc_id}.pdf"
-    path.write_bytes(blob)
-
-    # Mining is regex over word positions: about a second for 100 pages, so it
-    # stays inline. Labelling is the slow half and runs separately.
-    pages, rows = extract.mine_document(path, doc_id)
-
-    # Group before collecting. The model proposes which entity this document is
-    # about from its cover pages, grounded in a quote, and the proposal is
-    # matched against corpora that already exist so a second document about the
-    # same company joins the first instead of starting a namespace of its own.
-    # Nothing is labelled until a human confirms it.
-    identity = labeller.identify(extract.cover_text(path)) or {}
-    corpus = store.find_or_create_corpus(identity.get("subject"))
+    (UPLOADS / f"{doc_id}.pdf").write_bytes(blob)
 
     store.insert_pdf({
         "_id": doc_id,
         "filename": filename,
         "sha256": digest,
-        "page_count": pages,
+        "page_count": 0,
         "uploaded_at": datetime.now(timezone.utc),
-        "corpus_id": corpus["_id"] if corpus else None,
+        "corpus_id": None,
         "corpus_confirmed": False,
-        "doc_type": identity.get("doc_type") or "other",
-        "proposed_subject": identity.get("subject") or "",
-        "proposed_evidence": identity.get("subject_evidence") or "",
+        "doc_type": "other",
+        "proposed_subject": "",
+        "proposed_evidence": "",
+        "state": "queued",
+        "progress": {"done": 0, "total": 0},
     })
-    store.insert_evidence([dict(r, doc_id=doc_id) for r in rows])
+    return doc_id, False
 
-    return {
-        "doc_id": doc_id,
-        "duplicate": False,
-        "mined": len(rows),
-        "accepted": sum(1 for r in rows if r["accepted"]),
-        "corpus_id": corpus["_id"] if corpus else None,
-        "corpus_name": corpus["name"] if corpus else None,
-        "doc_type": identity.get("doc_type") or "other",
-        "proposed_subject": identity.get("subject") or "",
-        "proposed_evidence": identity.get("subject_evidence") or "",
-        "needs_confirmation": True,
-    }
+
+def process(doc_id):
+    """Mine a registered document and propose which corpus it belongs to.
+
+    Each stage records where it has got to, because the page has no other way to
+    tell a long step from a stuck one. Safe to re-run: evidence ids are
+    content-derived, so re-mining reconciles rather than duplicating.
+    """
+    path = UPLOADS / f"{doc_id}.pdf"
+    try:
+        store.set_doc(doc_id, state="reading")
+        pages, rows = extract.mine_document(path, doc_id)
+        store.set_doc(doc_id, page_count=pages, state="storing evidence",
+                      progress={"done": 0, "total": len(rows)})
+
+        store.insert_evidence([dict(r, doc_id=doc_id) for r in rows])
+        accepted = sum(1 for r in rows if r["accepted"])
+        store.set_doc(doc_id, state="identifying",
+                      progress={"done": len(rows), "total": len(rows)})
+
+        # Group before collecting. The model proposes which entity this document
+        # is about from its cover pages, grounded in a quote, and the proposal is
+        # matched against corpora that already exist so a second document about
+        # the same company joins the first instead of starting a namespace of its
+        # own. Nothing is labelled until a human confirms it.
+        identity = labeller.identify(extract.cover_text(path)) or {}
+        corpus = store.find_or_create_corpus(identity.get("subject"))
+
+        store.set_doc(
+            doc_id,
+            corpus_id=corpus["_id"] if corpus else None,
+            doc_type=identity.get("doc_type") or "other",
+            proposed_subject=identity.get("subject") or "",
+            proposed_evidence=identity.get("subject_evidence") or "",
+            state="needs confirmation",
+            error=None,
+        )
+        return {"doc_id": doc_id, "mined": len(rows), "accepted": accepted,
+                "corpus_id": corpus["_id"] if corpus else None,
+                "corpus_name": corpus["name"] if corpus else None,
+                "doc_type": identity.get("doc_type") or "other",
+                "proposed_subject": identity.get("subject") or ""}
+    except Exception as exc:
+        # Surfaced on the document row rather than only in the server log, so a
+        # failed upload says so on the page instead of sitting at "reading".
+        store.set_doc(doc_id, state="failed", error=f"{type(exc).__name__}: {exc}")
+        raise
+
+
+def ingest(blob, filename, digest=None):
+    """register + process, for callers that want it done before returning."""
+    doc_id, duplicate = register(blob, filename, digest)
+    if duplicate:
+        return {"doc_id": doc_id, "duplicate": True}
+    return dict(process(doc_id), duplicate=False, needs_confirmation=True)
 
 
 @app.get("/api/corpora")
@@ -241,6 +276,7 @@ def _label_batch(doc_id, limit):
         row["subject"] = corpus_name
 
     batch = list(_call_groups(rows).values())[:limit]
+    store.set_doc(doc_id, state="labelling", progress={"done": 0, "total": len(batch)})
 
     # Written as each group returns, not once at the end. A run that collected
     # everything and wrote it last lost all of it whenever the process died -
@@ -248,12 +284,14 @@ def _label_batch(doc_id, limit):
     # so a dead run and a slow one looked identical. Claims are keyed by
     # evidence_id and _pending() skips evidence that already has one, so an
     # interrupted run resumes from wherever it stopped.
-    written = 0
+    written = done = 0
     with ThreadPoolExecutor(max_workers=WORKERS) as pool:
         for members, out in zip(batch, pool.map(labeller.label_one, [g[0] for g in batch])):
             if out is None:
                 continue
             now = datetime.now(timezone.utc)
+            done += 1
+            store.set_doc(doc_id, progress={"done": done, "total": len(batch)})
             written += store.upsert_claims([
                 dict(
                     out,
@@ -273,6 +311,7 @@ def _label_batch(doc_id, limit):
     # Deterministic and cheap, so it runs after every batch rather than being a
     # separate step somebody has to remember.
     store.adjudicate_groups()
+    store.set_doc(doc_id, state="labelled")
     return written
 
 

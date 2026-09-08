@@ -10,3 +10,4 @@ deploy/tls/
 deploy/.env*
 factlayer-dump.zip
 dump/
+ollama-serve.log

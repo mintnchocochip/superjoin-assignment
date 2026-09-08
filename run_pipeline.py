@@ -231,8 +231,30 @@ def retune_ollama_host():
     env.write_text("\n".join(kept) + "\n", encoding="utf-8")
 
 
+OLLAMA_LOG = ROOT / "ollama-serve.log"
+
+
+def wait_for_ollama(tries):
+    import label as labeller
+
+    for _ in range(tries):
+        if labeller.available():
+            return True
+        time.sleep(2)
+    return False
+
+
 def ensure_ollama_running():
-    """The Linux installer registers a systemd service; start it if it is idle."""
+    """Start Ollama by whichever route this machine actually offers.
+
+    The official Linux installer registers a systemd unit, but a manual tarball
+    or snap install does not, and `systemctl enable --now ollama` then fails with
+    "unit ollama.service not found". That failure used to be discarded, so the
+    run waited sixty seconds and died reporting Ollama silent - without ever
+    trying the one thing that always works and needs no root: starting the server
+    ourselves. Both routes now get a turn, and the server is detached so it
+    outlives this script, because uvicorn needs it afterwards.
+    """
     import label as labeller
 
     if labeller.available():
@@ -243,20 +265,26 @@ def ensure_ollama_running():
 
     if LINUX and have("systemctl"):
         say("==> starting the Ollama service")
-        quiet(["sudo", "systemctl", "enable", "--now", "ollama"])
-    else:
-        say("==> starting ollama serve in the background")
-        subprocess.Popen(["ollama", "serve"], cwd=ROOT,
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if quiet(["sudo", "systemctl", "enable", "--now", "ollama"]):
+            if wait_for_ollama(15):
+                return
+        else:
+            say("    no systemd unit for ollama; starting the server directly")
 
-    for _ in range(30):
-        if labeller.available():
-            return
-        time.sleep(2)
+    say(f"==> starting ollama serve in the background ({OLLAMA_LOG.name})")
+    with OLLAMA_LOG.open("ab") as log:
+        subprocess.Popen(["ollama", "serve"], cwd=ROOT, stdout=log, stderr=log,
+                         start_new_session=os.name != "nt")
+    if wait_for_ollama(30):
+        return
 
     # systemd starts ollama with its own environment, not this one, so a service
     # asked to move ports comes up on 11434 regardless. Check there before dying.
     retune_ollama_host()
+    if not labeller.available() and OLLAMA_LOG.exists():
+        say(f"\n    last lines of {OLLAMA_LOG.name}:")
+        for line in OLLAMA_LOG.read_text(errors="replace").splitlines()[-12:]:
+            say(f"    {line}")
 
 
 def provision(assume_yes):

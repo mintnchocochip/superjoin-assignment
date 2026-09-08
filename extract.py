@@ -242,6 +242,25 @@ def mine(pdf_path, doc_id):
         doc.close()
 
 
+def cover_text(pdf_path, pages=2, limit=2500):
+    """The opening pages as text, for identifying what the document is.
+
+    Same band reconstruction as the miner, so the entity name on a title page
+    survives as one line instead of arriving one word per line.
+    """
+    doc = pymupdf.open(pdf_path)
+    try:
+        out = []
+        for page in list(doc)[:pages]:
+            for cells in _bands(page):
+                line = " ".join(c[2] for c in cells).strip()
+                if line:
+                    out.append(line)
+        return "\n".join(out)[:limit]
+    finally:
+        doc.close()
+
+
 def mine_document(pdf_path, doc_id):
     """Mine a document and stamp every row with its stable id. Returns (pages, rows)."""
     doc = pymupdf.open(pdf_path)

@@ -28,11 +28,38 @@ import sys
 import urllib.error
 import urllib.request
 
-HOST = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
+def _host(raw):
+    """Normalise OLLAMA_HOST, which Ollama itself writes as bare `host:port`.
+
+    Worth supporting both spellings because the default port often cannot be
+    used on Windows: 11434 falls inside a reserved TCP range that Hyper-V claims
+    (`netsh interface ipv4 show excludedportrange protocol=tcp`), so Ollama
+    fails to bind with "an attempt was made to access a socket in a way
+    forbidden by its access permissions" once Docker Desktop has started. Moving
+    it needs one variable that both processes understand.
+    """
+    raw = (raw or "").strip().rstrip("/")
+    if not raw:
+        return "http://127.0.0.1:11434"
+    return raw if raw.startswith(("http://", "https://")) else f"http://{raw}"
+
+
+HOST = _host(os.environ.get("OLLAMA_HOST"))
 MODEL = os.environ.get("OLLAMA_MODEL", "qwen3:4b")
 NUM_CTX = 4096
 
 GROUNDED = ("metric", "period", "basis", "vintage", "scope")
+IDENTITY = ("subject", "doc_type")
+
+# What kind of document this is. Recorded, and deliberately NOT part of a group
+# key - an annual report figure and an earnings deck figure for the same metric
+# have to stay comparable. Its use is the reverse comparison: same metric, same
+# doc_type, different subject, which is how one company gets read against
+# another. That query is not wired yet.
+DOC_TYPES = {
+    "annual_report", "prospectus", "earnings_presentation", "press_release",
+    "economic_survey", "central_bank_report", "imf_report", "other",
+}
 UNITS = {"INR_crore", "INR_lakh", "INR_million", "INR_billion", "percent", "ratio", "count"}
 BASES = {"consolidated", "standalone"}
 VINTAGES = {"audited", "provisional", "restated", "unaudited"}
@@ -251,7 +278,7 @@ def provided_text(row):
     )
 
 
-def ground(out, source):
+def ground(out, source, fields=GROUNDED):
     """Drop every field whose supporting quote is not actually in the source.
 
     This is the part that works. The prompt asks the model to quote; nothing
@@ -259,19 +286,17 @@ def ground(out, source):
     was shown and the field goes with it when the check fails.
     """
     haystack = _norm(source)
-    for field in GROUNDED:
+    for field in fields:
         quote = out.get(f"{field}_evidence")
         if _norm(out.get(field)) in NULLISH:
             out[field] = None
         if not quote or _norm(quote) in NULLISH or _norm(quote) not in haystack:
             out[field] = None
             out[f"{field}_evidence"] = None
-    if out.get("basis") not in BASES:
-        out["basis"] = None
-    if out.get("vintage") not in VINTAGES:
-        out["vintage"] = None
-    if out.get("unit") not in UNITS:
-        out["unit"] = None
+    for field, allowed in (("basis", BASES), ("vintage", VINTAGES),
+                           ("unit", UNITS), ("doc_type", DOC_TYPES)):
+        if field in out and out[field] not in allowed:
+            out[field] = None
     return out
 
 
@@ -294,16 +319,16 @@ def _prompt(row):
     )
 
 
-def _generate(prompt, model=None, timeout=180):
+def _generate(prompt, model=None, timeout=180, system=None, schema=None):
     """One constrained generation. Returns (parsed, error); exactly one is None."""
     body = json.dumps(
         {
             "model": model or MODEL,
-            "system": SYSTEM,
+            "system": system or SYSTEM,
             "prompt": prompt,
             "stream": False,
             "think": False,
-            "format": SCHEMA,
+            "format": schema or SCHEMA,
             "options": {"temperature": 0, "num_ctx": NUM_CTX},
         }
     ).encode("utf-8")
@@ -319,6 +344,67 @@ def _generate(prompt, model=None, timeout=180):
         return None, f"{type(exc).__name__}: {exc}"
     except (json.JSONDecodeError, KeyError) as exc:
         return None, f"unparseable response: {type(exc).__name__}: {exc}"
+
+
+IDENTIFY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "subject": {"type": ["string", "null"]},
+        "subject_evidence": {"type": ["string", "null"]},
+        "doc_type": {"type": ["string", "null"], "enum": sorted(DOC_TYPES) + [None]},
+        "doc_type_evidence": {"type": ["string", "null"]},
+        "confidence": {"type": "number"},
+    },
+    "required": ["subject", "subject_evidence", "doc_type", "doc_type_evidence",
+                 "confidence"],
+}
+
+IDENTIFY_SYSTEM = """You are shown the opening pages of a financial or economic document. \
+Say which entity it is ABOUT and what kind of document it is. Use ONLY the text provided.
+
+subject   the organisation or economy the document reports on, as the document
+          writes it: "Delhivery Limited", "India". Not the publisher when they
+          differ - an IMF staff report on India has subject India, not the IMF.
+subject_evidence
+          a phrase copied verbatim from the text that names it. If you cannot
+          copy one, both fields are null.
+doc_type  one of: annual_report, prospectus, earnings_presentation,
+          press_release, economic_survey, central_bank_report, imf_report, other
+doc_type_evidence
+          a phrase copied verbatim that shows what kind of document this is,
+          e.g. a title. Null if you cannot copy one.
+confidence 0.0-1.0, decided last.
+
+Never infer from what is usual. If the text does not say it, the field is null."""
+
+
+def identify(cover, model=None, timeout=120):
+    """Propose what a document is about and what kind it is, from its cover pages.
+
+    Grounded the same way labels are: every field arrives with a quote, and a
+    quote that is not in the cover text takes its field with it. A document that
+    never names its subject produces None rather than a guess, which is the
+    behaviour that keeps a misfiled document visible instead of silently
+    creating a corpus of one.
+    """
+    out, err = _generate(
+        f"OPENING PAGES:\n{cover}\n\nQuote only from the text above.",
+        model=model, timeout=timeout,
+        system=IDENTIFY_SYSTEM, schema=IDENTIFY_SCHEMA,
+    )
+    if err:
+        print(f"identify failed: {err}", file=sys.stderr)
+        return None
+
+    out = ground(out, cover, fields=IDENTITY)
+    return {
+        "subject": out.get("subject") or "",
+        "subject_evidence": out.get("subject_evidence") or "",
+        "doc_type": out.get("doc_type") or "other",
+        "doc_type_evidence": out.get("doc_type_evidence") or "",
+        "confidence": float(out.get("confidence") or 0.0),
+        "model": model or MODEL,
+    }
 
 
 def probe(model=None):
@@ -410,6 +496,24 @@ if __name__ == "__main__":
     assert worth_labelling(
         {"accepted": True, "kind": "text", "text": "Delhivery operates 90 gateways"},
         subject="delhivery limited")
+
+    # Identity grounding: same rule, different fields.
+    cover = "Delhivery Limited\nAnnual Report 2023-24\nConsolidated Financial Statements"
+    kept = ground({"subject": "Delhivery Limited", "subject_evidence": "Delhivery Limited",
+                   "doc_type": "annual_report", "doc_type_evidence": "Annual Report 2023-24"},
+                  cover, fields=IDENTITY)
+    assert kept["subject"] == "Delhivery Limited", kept
+    assert kept["doc_type"] == "annual_report", kept
+
+    # An entity the cover never names must not survive.
+    invented = ground({"subject": "DHL Group", "subject_evidence": "DHL Group"},
+                      cover, fields=IDENTITY)
+    assert invented["subject"] is None, invented
+
+    # A doc_type outside the vocabulary is dropped even when quoted.
+    bogus = ground({"doc_type": "quarterly_thing", "doc_type_evidence": "Annual Report 2023-24"},
+                   cover, fields=IDENTITY)
+    assert bogus["doc_type"] is None, bogus
 
     assert period_from("March 31, 2023") == "FY2023"
     assert period_from("Q4 FY24") == "Q4-FY2024"

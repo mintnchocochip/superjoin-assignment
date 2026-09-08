@@ -40,17 +40,6 @@ WORKERS = 4
 app = FastAPI(title="Fact Knowledge Layer")
 
 
-def subject_of(filename):
-    """The entity a document is about. Given to the labeller, never inferred by it.
-
-    ponytail: filename stem. Replace with a cover-page read when a document turns
-    up whose name says nothing useful.
-    """
-    stem = pathlib.Path(filename).stem.replace("_", "-").lower()
-    words = [w for w in stem.split("-") if not w.isdigit()]
-    return " ".join(words[:3]) or stem
-
-
 @app.on_event("startup")
 def setup():
     UPLOADS.mkdir(exist_ok=True)
@@ -103,13 +92,25 @@ async def upload(file: UploadFile = File(...)):
     # stays inline. Labelling is the slow half and runs in the background.
     pages, rows = extract.mine_document(path, doc_id)
 
+    # Group before collecting. The model proposes which entity this document is
+    # about from its cover pages, grounded in a quote, and the proposal is
+    # matched against corpora that already exist so a second document about the
+    # same company joins the first instead of starting a namespace of its own.
+    # Nothing is labelled until a human confirms it.
+    identity = labeller.identify(extract.cover_text(path)) or {}
+    corpus = store.find_or_create_corpus(identity.get("subject"))
+
     store.insert_pdf({
         "_id": doc_id,
         "filename": file.filename,
-        "subject": subject_of(file.filename),
         "sha256": digest,
         "page_count": pages,
         "uploaded_at": datetime.now(timezone.utc),
+        "corpus_id": corpus["_id"] if corpus else None,
+        "corpus_confirmed": False,
+        "doc_type": identity.get("doc_type") or "other",
+        "proposed_subject": identity.get("subject") or "",
+        "proposed_evidence": identity.get("subject_evidence") or "",
     })
     store.insert_evidence([dict(r, doc_id=doc_id) for r in rows])
 
@@ -118,7 +119,43 @@ async def upload(file: UploadFile = File(...)):
         "duplicate": False,
         "mined": len(rows),
         "accepted": sum(1 for r in rows if r["accepted"]),
+        "corpus_id": corpus["_id"] if corpus else None,
+        "corpus_name": corpus["name"] if corpus else None,
+        "doc_type": identity.get("doc_type") or "other",
+        "proposed_evidence": identity.get("subject_evidence") or "",
+        "needs_confirmation": True,
     }
+
+
+@app.get("/api/corpora")
+def corpora():
+    return store.list_corpora()
+
+
+@app.post("/api/documents/{doc_id}/corpus")
+def assign_corpus(doc_id: str, name: str = "", doc_type: str = ""):
+    """Confirm the proposed corpus, or reassign the document to another one.
+
+    Re-keys the document's existing claims in place. No model call: which entity
+    a document is about is a judgement that gets revised, and revising it must
+    not cost another labelling run.
+    """
+    pdf = store.get_pdf(doc_id)
+    if not pdf:
+        raise HTTPException(404, f"no document {doc_id}")
+
+    if name:
+        corpus = store.find_or_create_corpus(name)
+    elif pdf.get("corpus_id"):
+        corpus = {"_id": pdf["corpus_id"]}
+    else:
+        raise HTTPException(400, "nothing proposed for this document; pass a name")
+
+    if doc_type and doc_type not in labeller.DOC_TYPES:
+        raise HTTPException(400, f"doc_type must be one of {sorted(labeller.DOC_TYPES)}")
+
+    rekeyed = store.set_corpus(doc_id, corpus["_id"], doc_type or None, confirmed=True)
+    return {"doc_id": doc_id, "corpus_id": corpus["_id"], "claims_rekeyed": rekeyed}
 
 
 def _pending(doc_id):
@@ -159,27 +196,48 @@ def _label_batch(doc_id, limit):
     if not rows:
         return 0
 
+    # The corpus name is what the labeller is told the subject is, and the
+    # corpus id is what the group key is built from. Neither comes from the
+    # filename, and neither is the model's to choose.
+    pdf = store.get_pdf(doc_id) or {}
+    corpus = store.db().corpora.find_one({"_id": pdf.get("corpus_id")}) or {}
+    corpus_name = corpus.get("name", "")
+    for row in rows:
+        row["subject"] = corpus_name
+
     batch = list(_call_groups(rows).values())[:limit]
+
+    # Written as each group returns, not once at the end. A run that collected
+    # everything and wrote it last lost all of it whenever the process died -
+    # which happened three times over - and left the counter at zero throughout,
+    # so a dead run and a slow one looked identical. Claims are keyed by
+    # evidence_id and _pending() skips evidence that already has one, so an
+    # interrupted run resumes from wherever it stopped.
+    written = 0
     with ThreadPoolExecutor(max_workers=WORKERS) as pool:
-        labelled = list(pool.map(labeller.label_one, [g[0] for g in batch]))
+        for members, out in zip(batch, pool.map(labeller.label_one, [g[0] for g in batch])):
+            if out is None:
+                continue
+            now = datetime.now(timezone.utc)
+            written += store.upsert_claims([
+                dict(
+                    out,
+                    _id=uuid.uuid4().hex[:16],
+                    doc_id=doc_id,
+                    corpus_id=pdf.get("corpus_id"),
+                    doc_type=pdf.get("doc_type"),
+                    subject=corpus_name,
+                    evidence_id=row["id"],
+                    period=labeller.period_from(row.get("col_header")) or out["period"],
+                    labelled_at=now,
+                )
+                for row in members
+            ])
 
-    now = datetime.now(timezone.utc)
-    claims = []
-    for members, out in zip(batch, labelled):
-        if out is None:
-            continue
-        for row in members:
-            claims.append(dict(
-                out,
-                _id=uuid.uuid4().hex[:16],
-                doc_id=doc_id,
-                evidence_id=row["id"],
-                period=labeller.period_from(row.get("col_header")) or out["period"],
-                labelled_at=now,
-            ))
-
-    written = store.upsert_claims(claims)
     store.sync_groups(doc_id)
+    # Deterministic and cheap, so it runs after every batch rather than being a
+    # separate step somebody has to remember.
+    store.adjudicate_groups()
     return written
 
 
@@ -192,6 +250,20 @@ def start_labelling(doc_id: str, tasks: BackgroundTasks, limit: int = 400):
     # producing an empty run.
     if err := labeller.probe():
         raise HTTPException(503, f"{labeller.MODEL} cannot generate - {err}")
+
+    # Grouping comes first, and this is what enforces it. Labelling a document
+    # under an unconfirmed corpus would write hundreds of claims under a subject
+    # nobody checked, and every one of them would need re-keying afterwards.
+    pdf = store.get_pdf(doc_id)
+    if not pdf:
+        raise HTTPException(404, f"no document {doc_id}")
+    if not pdf.get("corpus_confirmed"):
+        raise HTTPException(
+            409,
+            f"corpus not confirmed for this document "
+            f"(proposed: {pdf.get('proposed_subject') or 'nothing'}). "
+            f"POST /api/documents/{doc_id}/corpus first.",
+        )
 
     pending = _pending(doc_id)
     tasks.add_task(_label_batch, doc_id, limit)
@@ -217,5 +289,45 @@ def evidence(doc_id: str, accepted: int = 1, kind: str = "", q: str = "",
 @app.get("/api/groups")
 def groups(limit: int = 100):
     """Claim groups spanning more than one document - the only ones that can
-    produce a finding, and what the adjudication step will read."""
+    produce a cross-document finding."""
     return [dict(g, group_key=g.pop("_id")) for g in store.cross_document_groups(limit)]
+
+
+@app.post("/api/adjudicate")
+def adjudicate(limit: int = 500):
+    """Recompute every verdict. No model call, so this is always safe to re-run."""
+    store.sync_groups()
+    return {"groups_adjudicated": store.adjudicate_groups(limit)}
+
+
+@app.get("/api/findings")
+def findings(type: str = "", cross_document: int = 0, limit: int = 100):
+    """Adjudicated pairs, each returned with both claims and their evidence.
+
+    `type` filters to corroborates | contradicts | reconcilable. Omitted, it
+    returns all three and excludes not_comparable, which is stored but is not a
+    finding.
+    """
+    if type and type not in ("corroborates", "contradicts", "reconcilable",
+                             "not_comparable"):
+        raise HTTPException(400, f"unknown finding type {type!r}")
+
+    rows = store.findings(type, bool(cross_document), limit)
+    wanted = {r["verdict"][side] for r in rows for side in ("a", "b") if r["verdict"].get(side)}
+    claims = store.claims_by_id(wanted)
+
+    out = []
+    for r in rows:
+        v = r["verdict"]
+        a, b = claims.get(v.get("a")), claims.get(v.get("b"))
+        if not a or not b:
+            continue
+        out.append({
+            "group_key": r["group_key"], "subject": r.get("subject"),
+            "metric": r.get("metric"), "type": v["type"],
+            "dimension": v.get("dimension"), "reason": v.get("reason"),
+            "confidence": v.get("confidence"),
+            "cross_document": v.get("cross_document"),
+            "a": a, "b": b,
+        })
+    return out

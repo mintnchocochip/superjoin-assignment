@@ -12,7 +12,10 @@
 // Idempotent: re-running updates the roles and leaves existing users alone.
 
 const DB = process.env.MONGO_DB || "factlayer";
-const COLLECTIONS = ["pdfs", "evidence", "claims", "claim_groups"];
+// Named one by one on purpose. A collection added to the schema without being
+// added here is refused at runtime, which is the role doing its job - adding
+// `corpora` failed exactly this way before it was listed.
+const COLLECTIONS = ["corpora", "pdfs", "evidence", "claims", "claim_groups"];
 
 const db = globalThis.db.getSiblingDB(DB);
 

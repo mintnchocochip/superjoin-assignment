@@ -1,6 +1,6 @@
 # Karpathy guidelines design review
 
-Session `3623c6ed` · 36 turns
+Session `3623c6ed` · 45 turns
 
 ## Turn 1 — 2026-09-07 13:25
 
@@ -2320,5 +2320,799 @@ git pull
 Two other things that output confirms, both good: the venv is active (`(.venv)`, and no "creating .venv" line), and the sudo-docker fallback fired correctly again.
 
 If they pull and it *still* fails identically, tell me — that would mean my `\r\n` replacement is missing something, most likely bare `\r` endings rather than `\r\n`, and I'd widen it.
+
+---
+
+## Turn 37 — 2026-09-08 14:05
+
+**Me:**
+
+> push
+
+*[Claude ran 2 tools: Bash ×2]*
+
+**Claude:**
+
+Branch is already in sync — the only uncommitted work is the transparency log the hook regenerated. Committing and pushing that.
+
+Pushed — `e6616ff..61bf5e0`. Branch in sync, working tree clean apart from files the hook will regenerate.
+
+There was nothing else pending: `e6616ff` (the line-endings fix) went up in the previous turn, so the only new work was the transparency log. Redaction check reported **clean** before committing.
+
+This lands on PR #3, which stays scoped to `docs/ai-log/`.
+
+<pr-created>https://github.com/mintnchocochip/superjoin-assignment/pull/3</pr-created>
+
+Worth noting the git output: `CRLF will be replaced by LF the next time Git touches it` — that's the new `.gitattributes` doing its job, converting my Windows working-tree files to LF on the way into the repo. Exactly the mechanism that was missing when your friend's copy went out.
+
+Their next step is unchanged — they need this on their machine, and the fastest route is still:
+
+```bash
+sed -i 's/\r$//' deploy/*.sh && python run_pipeline.py --setup-only
+```
+
+with `git pull` afterwards for the permanent version.
+
+---
+
+## Turn 38 — 2026-09-08 14:14
+
+**Me:**
+
+> superjoin-proj on  evidence-mining-and-labelling [$] via  v3.14.4 
+> ❯ python3 run_pipeline.py --setup-only
+> ==> creating .venv
+> ==> re-running inside /home/irk/Desktop/project run/mani/superjoin-proj/.venv/bin/python
+> ==> starting the Docker daemon
+> [sudo: authenticate] Password:         
+> ==> using sudo for docker (group membership needs a re-login)
+> ==> installing Python dependencies
+> ==> starting MongoDB replica set
+> ==> starting three mongod nodes
+> [+] up 18/18
+>  ✔️ Image mongo:8                      Pulled                                                                  61.8s
+>  ✔️ Network superjoin-facts_default    Created                                                                  0.0s
+>  ✔️ Volume superjoin-facts_mongo1-data Created                                                                  0.0s
+>  ✔️ Volume superjoin-facts_mongo2-data Created                                                                  0.0s
+>  ✔️ Volume superjoin-facts_mongo3-data Created                                                                  0.0s
+>  ✔️ Container facts-mongo3             Started                                                                  0.9s
+>  ✔️ Container facts-mongo2             Started                                                                  0.8s
+>  ✔️ Container facts-mongo1             Started                                                                  0.7s
+> ==> waiting for mongo1 to accept authenticated connections
+> ==> initiating replica set
+> Error response from daemon: Container ffcb669499efed18755544a1ba30309b1195871e4648578a97ee494711024af9 is restarting, wait until the container is running
+>
+> [stop] deploy/bootstrap.sh failed
+>        Its output above says why.
+
+---
+
+## Turn 39 — 2026-09-08 14:15
+
+**Me:**
+
+> superjoin-proj on  evidence-mining-and-labelling [$] via  v3.14.4 
+> ❯ python3 run_pipeline.py --setup-only
+> ==> creating .venv
+> ==> re-running inside /home/irk/Desktop/project run/mani/superjoin-proj/.venv/bin/python
+> ==> starting the Docker daemon
+> [sudo: authenticate] Password:         
+> ==> using sudo for docker (group membership needs a re-login)
+> ==> installing Python dependencies
+> ==> starting MongoDB replica set
+> ==> starting three mongod nodes
+> [+] up 18/18
+>  ✔️ Image mongo:8                      Pulled                                                                  61.8s
+>  ✔️ Network superjoin-facts_default    Created                                                                  0.0s
+>  ✔️ Volume superjoin-facts_mongo1-data Created                                                                  0.0s
+>  ✔️ Volume superjoin-facts_mongo2-data Created                                                                  0.0s
+>  ✔️ Volume superjoin-facts_mongo3-data Created                                                                  0.0s
+>  ✔️ Container facts-mongo3             Started                                                                  0.9s
+>  ✔️ Container facts-mongo2             Started                                                                  0.8s
+>  ✔️ Container facts-mongo1             Started                                                                  0.7s
+> ==> waiting for mongo1 to accept authenticated connections
+> ==> initiating replica set
+> Error response from daemon: Container ffcb669499efed18755544a1ba30309b1195871e4648578a97ee494711024af9 is restarting, wait until the container is running
+>
+> [stop] deploy/bootstrap.sh failed
+>        Its output above says why....when running i got this error
+
+*[Claude ran 9 tools: Bash ×6, Edit ×2, TaskStop ×1]*
+
+**Claude:**
+
+Real progress — CRLF is fixed and Mongo actually started. Now `mongo1` is crash-looping. I'm fairly confident this is a Linux-only permissions problem that Docker Desktop masked on Windows.
+
+Confirmed the shape of it. `server.pem` is `chmod 400` owned by the host user (uid 1000), but mongod drops to `mongodb` (uid 999). On Linux bind mounts enforce that; Docker Desktop ignores permissions entirely, which is why it passed for me. The keyfile is copied in with correct ownership — the TLS material isn't.
+
+Two more things: their failed volumes need clearing, and bootstrap pressed on after the wait loop failed — which is why the error said "container is restarting" instead of naming the cause. Fixing that.
+
+Now verifying the change still works on my side before shipping it to them.
+
+Docker Desktop is slow to come up here — and a Windows run wouldn't prove this fix anyway, since Docker Desktop ignores the very permissions this is about. Validating the compose files without the daemon instead.
+
+Both compose files resolve correctly and the entrypoint chain is intact. Committing and pushing.
+
+Pushed as `78d53be`. Have them run:
+
+```bash
+git pull
+cd deploy && docker compose --env-file ../.env down -v && cd ..
+python run_pipeline.py --setup-only
+```
+
+The `down -v` matters — their volumes are from an attempt where mongod never started, so they're half-initialised.
+
+## What was wrong
+
+The keyfile was already copied into the container and re-owned, because mongod refuses one it thinks is world-readable — an NTFS bind mount arrives `0777`. **The TLS material has the exact opposite problem and I missed it.**
+
+`bootstrap.sh` writes `server.pem` as `0400` owned by the host user (uid 1000). By the time mongod reads it, the official entrypoint has dropped to `mongodb` (uid 999). On Linux, bind mounts enforce that — uid 999 can't read a `0400` file owned by 1000, so mongod exits before it can log much, and the container restart-loops.
+
+Docker Desktop **ignores Unix permissions entirely**, which is why every run on my machine passed. This bug was only ever going to appear on Linux.
+
+`server.pem` and `ca.crt` are now installed alongside the keyfile with the right owner, and mongod, the healthcheck, and bootstrap all read the copies. Same treatment in the Percona variant.
+
+## Also fixed: the useless error message
+
+`bootstrap.sh` pressed on to `rs.initiate` after the wait loop timed out, which is why they saw *"Container is restarting"* — a symptom, not a cause. It now stops at the wait loop and prints the last 25 lines of `facts-mongo1`'s log, where mongod has already written the real reason.
+
+## Honest status
+
+I verified only that both compose files resolve and the entrypoint chain is intact. **A successful run on my machine would prove nothing here** — Docker Desktop is precisely the platform that masks this class of bug, so I'd have gotten a green run either way.
+
+If it still fails, the new error output will now contain mongod's own words. Send me that and it should be conclusive.
+
+---
+
+## Turn 40 — 2026-09-08 14:37
+
+**Me:**
+
+> uperjoin-proj on  evidence-mining-and-labelling [$!] via  v3.14.4 
+> ❯ cd deploy
+> sudo docker compose --env-file ../.env down -v
+> cd ..
+> python3 run_pipeline.py --setup-only
+> ==> creating .venv
+> ==> re-running inside /home/irk/Desktop/project run/mani/superjoin-proj/.venv/bin/python
+> ==> starting the Docker daemon
+> ==> using sudo for docker (group membership needs a re-login)
+> ==> installing Python dependencies
+> ==> starting MongoDB replica set
+>     normalising line endings in bootstrap.sh
+> ==> starting three mongod nodes
+> [+] up 7/7
+>  ✔️ Network superjoin-facts_default    Created                                                                  0.0s
+>  ✔️ Volume superjoin-facts_mongo3-data Created                                                                  0.0s
+>  ✔️ Volume superjoin-facts_mongo1-data Created                                                                  0.0s
+>  ✔️ Volume superjoin-facts_mongo2-data Created                                                                  0.0s
+>  ✔️ Container facts-mongo3             Started                                                                  0.2s
+>  ✔️ Container facts-mongo2             Started                                                                  0.4s
+>  ✔️ Container facts-mongo1             Started                                                                  0.3s
+> ==> waiting for mongo1 to accept authenticated connections
+>
+> mongo1 never became ready. Its last lines:
+>     {"t":{"$date":"2026-09-08T14:33:28.815+00:00"},"s":"F",  "c":"CONTROL",  "id":12257600,"ctx":"main","msg":"MongoDB cannot start: Linux kernel versions 6.19 and newer has a known incompatibility with this version of MongoDB. See https://jira.mongodb.org/browse/SERVER-121912 for more information."}
+>     {"t":{"$date":"2026-09-08T14:33:29.197+00:00"},"s":"F",  "c":"CONTROL",  "id":12257600,"ctx":"main","msg":"MongoDB cannot start: Linux kernel versions 6.19 and newer has a known incompatibility with this version of MongoDB. See https://jira.mongodb.org/browse/SERVER-121912 for more information."}
+>     {"t":{"$date":"2026-09-08T14:33:29.571+00:00"},"s":"F",  "c":"CONTROL",  "id":12257600,"ctx":"main","msg":"MongoDB cannot start: Linux kernel versions 6.19 and newer has a known incompatibility with this version of MongoDB. See https://jira.mongodb.org/browse/SERVER-121912 for more information."}
+>     {"t":{"$date":"2026-09-08T14:33:30.156+00:00"},"s":"F",  "c":"CONTROL",  "id":12257600,"ctx":"main","msg":"MongoDB cannot start: Linux kernel versions 6.19 and newer has a known incompatibility with this version of MongoDB. See https://jira.mongodb.org/browse/SERVER-121912 for more information."}
+>     {"t":{"$date":"2026-09-08T14:33:31.149+00:00"},"s":"F",  "c":"CONTROL",  "id":12257600,"ctx":"main","msg":"MongoDB cannot start: Linux kernel versions 6.19 and newer has a known incompatibility with this version of MongoDB. See https://jira.mongodb.org/browse/SERVER-121912 for more information."}
+>     {"t":{"$date":"2026-09-08T14:33:32.917+00:00"},"s":"F",  "c":"CONTROL",  "id":12257600,"ctx":"main","msg":"MongoDB cannot start: Linux kernel versions 6.19 and newer has a known incompatibility with this version of MongoDB. See https://jira.mongodb.org/browse/SERVER-121912 for more information."}
+>     {"t":{"$date":"2026-09-08T14:33:36.314+00:00"},"s":"F",  "c":"CONTROL",  "id":12257600,"ctx":"main","msg":"MongoDB cannot start: Linux kernel versions 6.19 and newer has a known incompatibility with this version of MongoDB. See https://jira.mongodb.org/browse/SERVER-121912 for more information."}
+>     {"t":{"$date":"2026-09-08T14:33:42.884+00:00"},"s":"F",  "c":"CONTROL",  "id":12257600,"ctx":"main","msg":"MongoDB cannot start: Linux kernel versions 6.19 and newer has a known incompatibility with this version of MongoDB. See https://jira.mongodb.org/browse/SERVER-121912 for more information."}
+>     {"t":{"$date":"2026-09-08T14:33:55.867+00:00"},"s":"F",  "c":"CONTROL",  "id":12257600,"ctx":"main","msg":"MongoDB cannot start: Linux kernel versions 6.19 and newer has a known incompatibility with this version of MongoDB. See https://jira.mongodb.org/browse/SERVER-121912 for more information."}
+>     {"t":{"$date":"2026-09-08T14:34:21.654+00:00"},"s":"F",  "c":"CONTROL",  "id":12257600,"ctx":"main","msg":"MongoDB cannot start: Linux kernel versions 6.19 and newer has a known incompatibility with this version of MongoDB. See https://jira.mongodb.org/browse/SERVER-121912 for more information."}
+>     {"t":{"$date":"2026-09-08T14:35:12.999+00:00"},"s":"F",  "c":"CONTROL",  "id":12257600,"ctx":"main","msg":"MongoDB cannot start: Linux kernel versions 6.19 and newer has a known incompatibility with this version of MongoDB. See https://jira.mongodb.org/browse/SERVER-121912 for more information."}
+>
+> If that mentions a keyfile or certificate it could not read, the volumes
+> are from an older attempt - clear them and re-run:
+>     sudo docker compose --env-file ../.env -f docker-compose.yml down -v
+>
+> [stop] deploy/bootstrap.sh failed
+>        Its output above says why.
+>
+> superjoin-proj on  evidence-mining-and-labelling [$!] via  v3.14.4 took 2m9s...my friend used i use Ubuntu 26.04 LTS
+
+*[Claude ran 6 tools: WebFetch ×2, Bash ×2, ToolSearch ×1, WebSearch ×1]*
+
+**Claude:**
+
+That's definitive, and it's not our code — MongoDB 8 hard-refuses to start on kernel 6.19+, which Ubuntu 26.04 ships. Worth noting the diagnostic I added worked: it surfaced the real cause immediately instead of "container is restarting".
+
+Let me find which version actually fixes this rather than guess.
+
+Found it, and it's worse than a version bump: **there is no fixed MongoDB 8.x yet.** Let me confirm the scope before choosing a fix.
+
+Now I have it. Two conflicting facts, and together they explain the fix:
+
+- **Official:** MongoDB **8.0 and newer** are affected; 7.x isn't mentioned
+- **Community:** `mongo:8.0.4` works on kernel 7.x — and 8.2.5 is *also* broken
+
+That pattern says the fix is having an **older** vendored TCMalloc, not a newer one. So pinning back is the reliable move.
+
+Pushed as `b370d4f`. Have them run:
+
+```bash
+git pull
+cd deploy && sudo docker compose --env-file ../.env down -v && cd ..
+python3 run_pipeline.py --setup-only
+```
+
+## What was actually wrong
+
+Not our code, and not the permissions problem I predicted. MongoDB 8.0+ vendors a TCMalloc that violates the kernel's rseq ABI, so **mongod checks the kernel version and refuses to start** — it isn't a crash to work around. The broken range is kernel **6.19 through 7.0.13**, and Ubuntu 26.04 ships inside it ([SERVER-121912](https://jira.mongodb.org/browse/SERVER-121912)).
+
+The counter-intuitive part: **there's no newer 8.x to upgrade to.** The fix is having an *older* vendored TCMalloc, which is why `8.0.4` is reported working while `8.2.5` isn't. So I pinned `mongo:7`, which predates the offending version entirely and supports everything used here — replica sets, keyfile auth, TLS, pipeline `$lookup`.
+
+The tag is now `${MONGO_IMAGE:-mongo:7}`, so if 7.x ever misbehaves they can switch without editing files:
+
+```bash
+MONGO_IMAGE=mongo:8.0.4 bash deploy/bootstrap.sh
+```
+
+The failure path now names that escape hatch too.
+
+## Worth calling out
+
+**The diagnostic I added last time did its job.** The identical run previously reported only *"Container is restarting"*. It now prints mongod's own words, and the real cause was nothing like what I'd inferred. I was confident about the TLS permissions theory and it was wrong — that fix is still correct and still needed on Linux, but it wasn't what was blocking them.
+
+I've now been wrong twice in a row about this environment while reasoning from a Windows box. The pattern is clear enough that I'd treat any further Linux-side prediction from me as a hypothesis, not a diagnosis — the container log is the thing worth trusting.
+
+Sources: [SERVER-121912](https://jira.mongodb.org/browse/SERVER-121912), [MongoDB 8.x and Linux Kernel 6.19](https://www.mongodb.com/community/forums/t/mongodb-8-x-and-linux-kernel-6-19/337547), [MongoDB and the new Linux kernel](https://snowgoons.ro/posts/2026-07-01-mongodb-and-the-new-linux-kernel/)
+
+---
+
+## Turn 41 — 2026-09-08 14:46
+
+**Me:**
+
+> superjoin-proj on  evidence-mining-and-labelling [$!] via  v3.14.4 
+> ❯ cd deploy && sudo docker compose --env-file ../.env down -v && cd ..
+> python3 run_pipeline.py --setup-only
+> [sudo: authenticate] Password:         
+> [+] down 7/7
+>  ✔️ Container facts-mongo3             Removed                                                                  0.1s
+>  ✔️ Container facts-mongo1             Removed                                                                  0.1s
+>  ✔️ Container facts-mongo2             Removed                                                                  0.1s
+>  ✔️ Volume superjoin-facts_mongo2-data Removed                                                                  0.0s
+>  ✔️ Volume superjoin-facts_mongo3-data Removed                                                                  0.0s
+>  ✔️ Volume superjoin-facts_mongo1-data Removed                                                                  0.0s
+>  ✔️ Network superjoin-facts_default    Removed                                                                  0.1s
+> ==> creating .venv
+> ==> re-running inside /home/irk/Desktop/project run/mani/superjoin-proj/.venv/bin/python
+> ==> starting the Docker daemon
+> ==> using sudo for docker (group membership needs a re-login)
+> ==> installing Python dependencies
+> ==> starting MongoDB replica set
+>     normalising line endings in bootstrap.sh
+> ==> starting three mongod nodes
+> [+] up 18/18
+>  ✔️ Image mongo:7                      Pulled                                                                  45.5s
+>  ✔️ Volume superjoin-facts_mongo3-data Created                                                                  0.0s
+>  ✔️ Volume superjoin-facts_mongo2-data Created                                                                  0.0s
+>  ✔️ Network superjoin-facts_default    Created                                                                  0.0s
+>  ✔️ Volume superjoin-facts_mongo1-data Created                                                                  0.0s
+>  ✔️ Container facts-mongo3             Started                                                                  0.9s
+>  ✔️ Container facts-mongo2             Started                                                                  1.1s
+>  ✔️ Container facts-mongo1             Started                                                                  1.0s
+> ==> waiting for mongo1 to accept authenticated connections
+> ==> initiating replica set
+> initiated
+> ==> waiting for a primary
+> ==> applying roles and users
+> rs0 [direct: primary] test> 
+> rs0 [direct: primary] test> 
+> rs0 [direct: primary] test> 
+> rs0 [direct: primary] test> 
+> rs0 [direct: primary] test> 
+> rs0 [direct: primary] test> 
+> rs0 [direct: primary] test> 
+> rs0 [direct: primary] test> 
+> rs0 [direct: primary] test> 
+> rs0 [direct: primary] test> 
+> rs0 [direct: primary] test> 
+> rs0 [direct: primary] test> 
+> rs0 [direct: primary] test> 
+> rs0 [direct: primary] test> 
+> rs0 [direct: primary] test> 
+> rs0 [direct: primary] test> 
+> rs0 [direct: primary] test> 
+> rs0 [direct: primary] test> 
+> rs0 [direct: primary] test> 
+> rs0 [direct: primary] test> 
+> rs0 [direct: primary] factlayer> 
+> rs0 [direct: primary] factlayer> | | | | | | | | | | [Function: upsertRole]
+> rs0 [direct: primary] factlayer> 
+> rs0 [direct: primary] factlayer> | | | | | | | | | | [Function: upsertUser]
+> rs0 [direct: primary] factlayer> 
+> rs0 [direct: primary] factlayer> | | | | | | | created role factsWriter
+>
+> rs0 [direct: primary] factlayer> 
+> rs0 [direct: primary] factlayer> | | | | | | created role factsReader
+>
+> rs0 [direct: primary] factlayer> 
+> rs0 [direct: primary] factlayer> created user facts_app
+>
+> rs0 [direct: primary] factlayer> created user facts_ro
+>
+> rs0 [direct: primary] factlayer> 
+> rs0 [direct: primary] factlayer> 
+> RBAC applied on factlayer. Users: facts_app, facts_ro
+>
+> rs0 [direct: primary] factlayer> ==> replica set members
+>    mongo1:27017  PRIMARY
+>    mongo2:27017  SECONDARY
+>    mongo3:27017  SECONDARY
+>
+> Replica set rs0 is up on 27017/27018/27019. TLS required, RBAC on.
+> The application connection string is in ../.env (gitignored).
+> ==> checking Ollama at http://127.0.0.1:12345
+> ==> starting the Ollama service
+>
+> [stop] Ollama is not answering at http://127.0.0.1:12345
+>        Start it with ollama serve. On Windows the default port 11434 can fall inside a reserved range once Docker is running - if it refuses to bind, run OLLAMA_HOST=127.0.0.1:12345 ollama serve and put OLLAMA_HOST=127.0.0.1:12345 in .env.
+>
+> superjoin-proj on  evidence-mining-and-labelling [$!] via  v3.14.4 took 2m12s 
+> ❯
+
+---
+
+## Turn 42 — 2026-09-08 14:49
+
+**Me:**
+
+> This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+>
+> Summary:
+> ## 1. Primary Request and Intent
+>
+> The user is building a **Fact Knowledge Layer** for the Superjoin VIT 2026 engineering intern hiring assignment. Requests, in chronological order:
+>
+> 1. **Design review** — "I have sketched a High level design i can think off, perform a differential diagnosis on why this is viable and why it is not. What can be improved or where my thinking is incorrect" (with a hand-drawn architecture image).
+> 2. **MongoDB schema critique** — user described using MongoDB collections (pdfs, numerical data, textual info, evidence with agree/contradict tags) and asked for feedback.
+> 3. **System architecture** — "give me a system architecture for the same".
+> 4. **Mermaid diagrams** — "give mermaid code to visualize".
+> 5. **README + commit** — "add them to readme, and commit".
+> 6. **Build the UI first** — "first lets build a simple UI for uploading and getting evidence from the pdfs. It needs to be simple but functional."
+> 7. **Labelling with a local SLM** — via `/ponytail-audit` with args: "use Qwen3-4B to label the numerical data extracted from regex (also expand to catch information from tables as well), the model would also label the text exerpt from the pdf which it determined to have some meaningful evidence. The model never touches the evidence and all of them should be tagged by unique id in the db as well."
+> 8. **Grounded labelling** — user supplied a complete system prompt, input template, JSON schema with load-bearing key order, few-shot examples, and post-validation code that drops any field whose `*_evidence` quote isn't a substring of the provided text.
+> 9. **Prefilter** — "Only label what can appear in a finding": drop `accepted == False`, keyword-prefilter `row_label` against ~20 target metrics with fuzzy match, text excerpts only if they mention a target subject or event verb.
+> 10. **MongoDB deployment** — "using the schema in the readme, implement a mongodb database to store the data. Configure local mongodb deployment as well (ensure RBAC, encryption, availability)."
+> 11. **Install the model** — "use ollama cli to install the model".
+> 12. **Corpus layer** (plan mode) — "what if we have a master correlation in db where similar pdfs are grouped first then evidence is collected? Like delhivery pdfs are grped, we also group based on type of pdf financial report annoucnement etc".
+> 13. **Findings/verdicts** — after asking "is the ui end to end ready? (ignore labelling for now) is correlation, contradiction and reconsiliation all done?", then "proceed to implement the findings and verdict part".
+> 14. **Extraction fix, do not run** — "fix extraction but do not run it as it would be done on a different hardware".
+> 15. **Portable runner** — "create a script so that my friend can run the labelling and other ai tasks and return back the zipped mongodb dump. It should install all the required dependencies as well. does it also install mongodb, ollama as well everything there should be no troubleshooting or tinkering on thier ubuntu machine."
+> 16. **Standalone instructions** — "(not to be adde in the repo) give me a seperate md file to download which contains the instructions and what the code does so that my friend can run on his pc. He needs upload the pdf files and the ui should show the ingestion progress."
+> 17. **Push / PR** — several "push" requests and one create-PR command.
+> 18. **Debugging a real Ubuntu run** — three rounds of pasted error output from the friend's Ubuntu 26.04 machine.
+>
+> **Security-relevant constraints stated by the user (preserve verbatim):**
+> - "(not to be adde in the repo)" — regarding the standalone MD instructions file.
+> - "fix extraction but do not run it as it would be done on a different hardware"
+> - "pause" — user twice interrupted long-running polling/labelling and asked to stop.
+> - From the assignment brief (`superjoin-vit-2026-assignment.pdf`): "Keep credentials out of the repository" and the solution "should not rely on hard-coded facts, filenames, schemas, or document-specific rules."
+>
+> ## 2. Key Technical Concepts
+>
+> - **Claims vs evidence separation** — evidence is written once at ingest by regex and is immutable; claims are model-written and re-runnable. A model never touches a number.
+> - **Two-level grouping key** — `group_key = corpus|metric` (loose); qualifiers (`period`, `basis`, `vintage`, `scope`) stay *off* the key so apparent contradictions can be reconciled rather than reported.
+> - **Grounding validator** — every model field must arrive with a verbatim `*_evidence` quote; a validator checks it's a real substring and drops the field otherwise.
+> - **Field order is generation order** under constrained decoding — `is_fact`/`confidence` sit last.
+> - **Deterministic vs model boundary** — regex mines numbers, Python normalises periods/basis and computes verdicts; the model only labels.
+> - **Memoization** — one model call per distinct printed row, not per figure.
+> - **Blocking index** — `claims.group_key` keeps adjudication off O(n²).
+> - MongoDB replica set, keyfile internal auth, TLS `requireTLS`, custom RBAC roles, `w: majority`.
+> - PyMuPDF y-band row reconstruction; nearest-centre assignment for spanning headers.
+> - Ollama constrained JSON output (`format` schema), `think: false`, `num_ctx`.
+> - FastAPI `BackgroundTasks`, incremental writes for resumability.
+>
+> ## 3. Files and Code Sections
+>
+> ### `extract.py` — mining, no model ever runs here
+> Regex mining, y-band table reconstruction, cover text, band classification.
+>
+> ```python
+> BASIS_CELL = re.compile(r"\b(consolidated|standalone)\b", re.IGNORECASE)
+>
+> def _spanning_owner(cell, spans):
+>     """The spanning header a column belongs to, by nearest centre.
+>
+>     Period headers sit directly over their own column, so plain x-overlap finds
+>     them. A basis header does not: "Consolidated" is one short word centred over
+>     a *group* of columns...
+>     """
+>     if not spans:
+>         return None
+>     centre = (cell[0] + cell[1]) / 2
+>     return min(spans, key=lambda s: abs(centre - (s[0] + s[1]) / 2))[2]
+>
+> def classify_row(cells):
+>     """What kind of row this is: 'basis', 'period', or 'data'."""
+>     if not any(NUMERIC_CELL.match(c[2].strip()) for c in cells):
+>         if [c for c in cells if BASIS_CELL.search(c[2]) and len(c[2]) <= 60]:
+>             return "basis"
+>     labelled = [c for c in cells if PERIOD_CELL.search(c[2])]
+>     if labelled and len(labelled) >= max(1, len(cells) - 1):
+>         return "period"
+>     return "data"
+> ```
+> Has a `__main__` self-check using synthetic cells (no PDF/DB/model).
+>
+> ### `label.py` — the only place a model runs
+> `identify()` (corpus/doc_type from cover pages), `label_one()`, `ground()`, `period_from()`, `known_basis()`, `worth_labelling()`, `target_metric()`, `probe()`.
+>
+> ```python
+> def ground(out, source, fields=GROUNDED):
+>     haystack = _norm(source)
+>     for field in fields:
+>         quote = out.get(f"{field}_evidence")
+>         if _norm(out.get(field)) in NULLISH:
+>             out[field] = None
+>         if not quote or _norm(quote) in NULLISH or _norm(quote) not in haystack:
+>             out[field] = None
+>             out[f"{field}_evidence"] = None
+>     ...
+>
+> def known_basis(row):
+>     """A column band beats the statement heading..."""
+>     return basis_from(row.get("col_basis")) or basis_from(row.get("section"))
+>
+> def _host(raw):
+>     """Normalise OLLAMA_HOST, which Ollama itself writes as bare `host:port`."""
+>     raw = (raw or "").strip().rstrip("/")
+>     if not raw: return "http://127.0.0.1:11434"
+>     return raw if raw.startswith(("http://", "https://")) else f"http://{raw}"
+> ```
+>
+> ### `verdict.py` — pure function, no model, no DB
+> ```python
+>     if not differing:
+>         if same_row(a, b):
+>             return {"type": "not_comparable", ...,
+>                     "reason": "different columns of the same printed row", "confidence": 0.1}
+>         shared = [q for q in QUALIFIERS if (a.get(q) or "").strip() and (b.get(q) or "").strip()]
+>         if not shared:
+>             return {"type": "not_comparable", ...,
+>                     "reason": "values differ but no qualifier is stated on either side", "confidence": 0.1}
+>         agreed = ", ".join(f"{q} {a.get(q)}" for q in shared)
+>         return {"type": "contradicts", "dimension": None,
+>                 "reason": f"same metric and same {agreed}, different values", "confidence": 0.8}
+> ```
+> `TOLERANCE = 0.005`. Self-check covers all four cases plus both false-positive classes.
+>
+> ### `store.py` — five collections
+> `corpora`, `pdfs`, `evidence`, `claims`, `claim_groups`. Key functions: `group_key`, `find_or_create_corpus`, `set_corpus` (re-key without re-labelling), `set_doc` (progress publishing), `insert_evidence` (ReplaceOne upsert so re-mining works), `group_members`, `adjudicate_groups`, `findings`, `claims_by_id`, `ensure_indexes`.
+>
+> ### `app.py` — FastAPI
+> `register()` / `process()` / `ingest()` split so upload returns in ~0.1s; `_label_batch` writes incrementally and publishes progress; endpoints `/api/health`, `/api/documents`, `/api/documents/{id}/corpus`, `/remine`, `/label`, `/evidence`, `/api/corpora`, `/api/groups`, `/api/adjudicate`, `/api/findings`.
+>
+> ### `run_pipeline.py` — one-command runner
+> `ensure_venv()` (re-exec, PEP 668), `install_docker()`, `ensure_docker_running()` (sudo-docker fallback), `install_ollama()`, `ensure_ollama_running()`, `provision()`, `fix_line_endings()`, `write_dump()`, `restore()`. Flags: `--yes --limit --pdfs --restore --skip-setup --setup-only --dump-only`.
+>
+> ```python
+> def fix_line_endings():
+>     """Rewrite CRLF shell scripts to LF."""
+>     for script in sorted((ROOT / "deploy").glob("*.sh")):
+>         raw = script.read_bytes()
+>         if b"\r\n" in raw:
+>             say(f"    normalising line endings in {script.name}")
+>             script.write_bytes(raw.replace(b"\r\n", b"\n"))
+> ```
+>
+> ### `deploy/docker-compose.yml` — most recently edited
+> ```yaml
+>   image: ${MONGO_IMAGE:-mongo:7}
+>   entrypoint:
+>     - bash
+>     - -c
+>     - install -m 400 -o mongodb -g mongodb /etc/mongo/secrets/keyfile /keyfile
+>       && install -m 400 -o mongodb -g mongodb /etc/mongo/tls/server.pem /tls-server.pem
+>       && install -m 444 -o mongodb -g mongodb /etc/mongo/tls/ca.crt /tls-ca.crt
+>       && exec docker-entrypoint.sh "$@"
+>     - bash
+>   command: >
+>     mongod --replSet rs0 --bind_ip_all --keyFile /keyfile
+>       --tlsMode requireTLS --tlsCertificateKeyFile /tls-server.pem
+>       --tlsCAFile /tls-ca.crt --tlsAllowConnectionsWithoutCertificates
+> ```
+>
+> ### `deploy/bootstrap.sh` — current state shown in the environment note
+> Honours `${DOCKER:-docker}`; fails loudly with `docker logs --tail 25 facts-mongo1` when mongo1 never becomes ready, and names both escape hatches (`down -v`, `MONGO_IMAGE=mongo:8.0.4`).
+>
+> ### `deploy/mongo-init/roles.js`
+> `const COLLECTIONS = ["corpora", "pdfs", "evidence", "claims", "claim_groups"];` — custom `factsWriter`/`factsReader` roles rather than built-in `readWrite` (which carries `dropCollection`).
+>
+> ### `.gitattributes` (new)
+> `* text=auto eol=lf` plus explicit `*.sh text eol=lf`.
+>
+> ### `C:\Users\Shawf\AppData\Local\Temp\claude\...\scratchpad\RUN-THIS.md`
+> Standalone instructions for the friend, **deliberately outside the repo**, sent twice via SendUserFile.
+>
+> ## 4. Errors and Fixes
+>
+> 1. **PyMuPDF emits each table cell on its own line** — 4,482 rejections as "no label text" while accepting DIN/CIN/PIN codes. Fixed with label carry-forward + `IDENTIFIER` regex. 886 → 4,180 accepted.
+> 2. **Evidence id collisions** — added `row_no` to the id key.
+> 3. **`is_fact` always False** — field order is generation order under constrained decoding; moved `is_fact`/`confidence` last.
+> 4. **Model invented periods** (`Q4-FY2024` for a March 31 2023 column) — made `period_from()` deterministic from the column header.
+> 5. **My bug: `*_evidence` not in `required`** — model omitted them, so the validator deleted every *correct* label. All 18 fields across 8 rows dropped. Fixed by adding them to `required`.
+> 6. **`label_one` swallowed every error into `None`** — a model that couldn't load looked identical to a slow run; counter sat at zero for 700s. Added error messages + `probe()`.
+> 7. **All-or-nothing claim writes** — three runs killed, three runs lost entirely. Made writes incremental (this later saved 32 claims when the user hit pause).
+> 8. **Ollama died repeatedly** — root cause: port 11434 is inside Windows excluded range 11371–11470 claimed by Hyper-V once Docker Desktop starts. Moved to 12345; `_host()` normalises bare `host:port`.
+> 9. **Git Bash mangled `openssl -subj`** into `C:/Program Files/Git/CN=...` — `MSYS_NO_PATHCONV=1`.
+> 10. **NTFS keyfile "too open"** — compose `configs` ignores uid/gid/mode outside swarm; used an entrypoint that copies + chmods.
+> 11. **`replSetInitiate requires authentication`** — keyfile enables authorization; routed all mongosh through an authenticated `msh()`.
+> 12. **`host.docker.internal` members couldn't self-identify** — reverted to container names + `directConnection=true`.
+> 13. **RBAC blocked `corpora`** — the role worked as designed; added the collection to `roles.js`.
+> 14. **Raw newline broke the entire page script** — every handler dead, document list empty. Now check with `new Function(script)`. Same `\n`-in-heredoc trap bit me three times.
+> 15. **37 false contradictions** — all ours, not the filings'. Three rules → 0.
+> 16. **CRLF on Ubuntu** — `set: pipefail: invalid option name`. Committed blobs were LF; the friend's copy was *copied from Windows, not cloned*. Added `.gitattributes` + `fix_line_endings()`.
+> 17. **TLS files unreadable on Linux** — `0400` owned by uid 1000, mongod runs as uid 999, Linux enforces bind-mount permissions, Docker Desktop doesn't. Fixed by installing TLS into the container. (This was my prediction; it was *not* the actual cause of the final failure.)
+> 18. **The real Ubuntu blocker** — `MongoDB cannot start: Linux kernel versions 6.19 and newer has a known incompatibility` (SERVER-121912). Ubuntu 26.04 ships kernel 7.0. MongoDB 8.0+ vendors a TCMalloc violating the rseq ABI; the fix is an *older* TCMalloc (hence 8.0.4 works, 8.2.5 doesn't). Pinned `${MONGO_IMAGE:-mongo:7}`.
+>
+> **User feedback that changed my approach:**
+> - "is it possible to pause?" and "pause" — stop long polls; led to incremental writes.
+> - "no code changes right?" — I had to correct myself: there *was* an 18-line code change in `run_pipeline.py`.
+> - "fix extraction but do not run it" — I ran only pure self-checks, no pipeline.
+> - "(not to be adde in the repo)" — MD file kept in scratchpad.
+>
+> ## 5. Problem Solving
+>
+> **Solved:** the filename-derived subject that made cross-document findings structurally impossible; false-positive contradictions; grounding enforcement; throughput (45h → 4.3h); resumability; Windows/Linux portability of the deployment.
+>
+> **Verified with evidence:** RBAC denials, TLS refusal of plaintext, replica set elections, sha256 dedup, corpus merging (both Delhivery docs → `delhivery-limited`, IMF + Economic Survey → `india`), all 9 group keys sharing the `delhivery-limited` prefix, findings end-to-end (3 corroborates / 25 reconcilable / 0 contradicts), upload returning in 0.10s, dump/restore round-trip (13,766 docs → 0.8 MB).
+>
+> **Still open:**
+> - No cross-document finding yet — metrics don't overlap (annual report: `revenue_from_operations`, `total_income`…; Q4 deck: `express_parcel_revenue`, `ptl_freight_revenue`). Only ~5–13% of each document labelled.
+> - **README's Approach section contradicts the code** — says three collections, evidence embedded on the claim, `qwen2.5:7b`, `nomic-embed-text`, and "implementation is in progress". Flagged repeatedly to the user as the highest-value remaining fix since Approach is explicitly graded.
+> - Encryption at rest (Percona variant) written but never run.
+> - The friend's run is blocked pending the `mongo:7` pin.
+>
+> ## 6. All User Messages
+>
+> 1. `/andrej-karpathy-skills:karpathy-guidelines` — "I have sketched a High level design i can think off, perform a differential diagnosis on why this is viable and why it is not. What can be improved or where my thinking is incorrect" (with image).
+> 2. "I am not using graphdb, imma use mongodb collections. Where pdfs is a collection, numerical data (with context extracted) as another, textual information as another collection. Evicidene is a collection where serveal similar facts or opposing facts are are linked there to that evidence. they evidience are given a tag which says are they contradicting or agreeing together."
+> 3. "give me a system architecture for the same"
+> 4. "use local NLP small models or SLMs for ingestion using Ollama, i am too broke to api"
+> 5. "give mermaid code to visualize"
+> 6. "add them to readme, and commit"
+> 7. `git push` terminal paste showing "no upstream branch" + "how to activate venv?"
+> 8. "first lets build a simple UI for uploading and getting evidence from the pdfs. It needs to be simple but functional."
+> 9. `/ponytail:ponytail-audit` — "use Qwen3-4B to label the numerical data extracted from regex (also expand to catch information from tables as well), the model would also label the text exerpt from the pdf which it determined to have some meaningful evidence. The model never touches the evidence and all of them should be tagged by unique id in the db as well."
+> 10. A long message quoting my "Three things the model turned out to be bad at" summary, then supplying a complete replacement System prompt, Input template, Schema ("key order is load-bearing"), Few-shot examples, and Post-validation code ("not optional — this is what actually kills the hallucination").
+> 11. "Only label what can appear in a finding. * Drop `accepted == False` as we already compute `reject_reason` * Keyword-prefilter `row_label` against a small target-metric list (revenue, PAT/net profit, GDP growth, CPI/inflation, total assets…) Fuzzy match, ~20 terms. 10k rows → a few hundred. * Text excerpts: only label those mentioning a target subject or event verb (appointed/resigned/acquired/guidance). Most prose bands are boilerplate."
+> 12. "push"
+> 13. "now using the schema in the readme, implement a mongodb database to store the data. Configure local mongodb deployment as well (ensure RBAC, encryption, availability)."
+> 14. "use ollama cli to install the model"
+> 15. "what if we have a master correlation in db where similar pdfs are grouped first then evidence is collected? Like delhivery pdfs are grped, we also group based on type of pdf financial report annoucnement etc" (plan mode)
+> 16. AskUserQuestion answers: "model call on ingest + human verification"; "to create comparisions of similar facts from different pdfs (companies)"; "it would be used for comparision between multiple pdfs of the same type. Like dhl vs delhivery anual report. (future extension)" + "Nothing yet — just record it"
+> 17. "is it possible to pause?"
+> 18. "pause" then "is the ui end to end ready? (ignore labelling for now) is correlation, contradiction and reconsiliation all done?"
+> 19. "proceed to implement the findings and verdict part"
+> 20. A message quoting my 37-contradictions summary then: "...have u fized or is it still the same?"
+> 21. "fix extraction but do not run it as it would be done on a different hardware"
+> 22. "create a script so that my friend can run the labelling and other ai tasks and return back the zipped mongodb dump. It should install all the required dependencies as well. does it also install mongodb, ollama as well everything there should be no troubleshooting or tinkering on thier ubuntu machine."
+> 23. "(not to be adde in the repo) give me a seperate md file to download which contains the instructions and what the code does so that my friend can run on his pc." — then revised: "...He needs upload the pdf files and the ui should show the ingestion progress."
+> 24. "push"
+> 25. `<create-pr-command>` — create a PR (not draft), base `main`.
+> 26. Terminal paste: `source /bin/activate` failure + `set: pipefail` error + `No module named uvicorn`. "how to activate venv? and run this script this the result i got after running it... also this there was some pipefail also in installation"
+> 27. "no code changes right?"
+> 28. Terminal paste: same pipefail error after re-running.
+> 29. "push"
+> 30. Terminal paste: containers started but `Container ... is restarting`.
+> 31. "push"
+> 32. Terminal paste showing the definitive `MongoDB cannot start: Linux kernel versions 6.19 and newer has a known incompatibility` log, plus "my friend used i use Ubuntu 26.04 LTS".
+>
+> ## 7. Pending Tasks
+>
+> - **Friend's Ubuntu run** — needs `git pull`, `docker compose down -v`, then `python3 run_pipeline.py --setup-only` with the new `mongo:7` pin.
+> - **README Approach section is stale** — repeatedly flagged, never actioned. Says three collections / evidence embedded / `qwen2.5:7b` / "implementation in progress". Explicitly graded.
+> - Ubuntu provisioning partly validated (Docker + Ollama + GPU detection succeeded); MongoDB startup still unproven on that machine.
+> - No cross-document finding demonstrated yet.
+> - Encryption-at-rest (Percona) variant written but never run.
+>
+> ## 8. Current Work
+>
+> Immediately before this summary, I was fixing the third Ubuntu failure the user pasted. The friend's output showed my new diagnostic working — it printed mongod's own log instead of "container is restarting" — revealing:
+>
+> ```
+> MongoDB cannot start: Linux kernel versions 6.19 and newer has a known
+> incompatibility with this version of MongoDB. See
+> https://jira.mongodb.org/browse/SERVER-121912
+> ```
+>
+> I researched with WebFetch (the JIRA ticket) and WebSearch, establishing: MongoDB 8.0+ vendors a TCMalloc that violates the kernel's rseq ABI; the affected kernel range is **6.19 through 7.0.13**; **Ubuntu 26.04 LTS ships Linux 7.0**; there is no newer 8.x fix — the fix is having an *older* vendored TCMalloc, which is why `mongo:8.0.4` is reported working while `8.2.5` is not; MongoDB 7.x is unaffected.
+>
+> I then:
+> - Changed `deploy/docker-compose.yml` to `image: ${MONGO_IMAGE:-mongo:7}` with an explanatory comment block naming SERVER-121912.
+> - Verified resolution: default → `mongo:7` on all three services; `MONGO_IMAGE=mongo:8.0.4` override → `mongo:8.0.4`.
+> - Added a second escape-hatch message to `bootstrap.sh`'s failure path: `"If it mentions a Linux kernel incompatibility, this image will not run on this kernel at all"` with `$COMPOSE down -v && MONGO_IMAGE=mongo:8.0.4 bash deploy/bootstrap.sh`.
+> - Added a README note under Setup linking SERVER-121912.
+> - Committed and pushed as **`b370d4f`** (`78d53be..b370d4f`).
+>
+> The push succeeded. I had not yet written the user-facing reply explaining the diagnosis and the commands the friend should run.
+>
+> ## 9. Optional Next Step
+>
+> Report the `b370d4f` fix to the user and give the friend the exact commands, since the last user message was the pasted kernel-incompatibility error with "my friend used i use Ubuntu 26.04 LTS". The commands are:
+>
+> ```bash
+> git pull
+> cd deploy && sudo docker compose --env-file ../.env down -v && cd ..
+> python3 run_pipeline.py --setup-only
+> ```
+>
+> I should state plainly that this is **not our code's bug** — mongod checks the kernel version and refuses to start — cite SERVER-121912 with the sources ([MongoDB JIRA](https://jira.mongodb.org/browse/SERVER-121912), [MongoDB Community Hub](https://www.mongodb.com/community/forums/t/mongodb-8-x-and-linux-kernel-6-19/337547)), explain that the fix is pinning *back* to `mongo:7` rather than forward, note the `MONGO_IMAGE=mongo:8.0.4` fallback, and credit that the previous commit's diagnostic is what surfaced the real cause — while being explicit that my earlier TLS-permissions prediction was wrong. I should also note I cannot verify `mongo:7` on kernel 7.0 from Windows, so the friend's next run is the real test.
+>
+> If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: C:\Users\Shawf\.claude\projects\A--superjoin-proj\3623c6ed-6fa9-4ce7-a48a-be0b8ec84de6.jsonl
+> Continue the conversation from where it left off without asking the user any further questions. Resume directly — do not acknowledge the summary, do not recap what was happening, do not preface with "I'll continue" or similar. Pick up the last task as if the break never happened.
+
+---
+
+## Turn 43 — 2026-09-08 14:46
+
+**Me:**
+
+> <local-command-caveat>Caveat: The messages below were generated by the user while running local commands. DO NOT respond to these messages or otherwise consider them in your response unless the user explicitly asks you to.</local-command-caveat>
+
+---
+
+## Turn 44 — 2026-09-08 14:46
+
+**Me:**
+
+> *(invoked `/compact`)*
+
+---
+
+## Turn 45 — 2026-09-08 14:49
+
+**Me:**
+
+> ~ via  v22.22.1 via  v3.14.4 
+> ❯ ollama serve
+> time=2026-09-08T20:16:28.676+05:30 level=INFO source=routes.go:1955 msg="server config" env="map[CUDA_VISIBLE_DEVICES: GGML_VK_VISIBLE_DEVICES: GPU_DEVICE_ORDINAL: HIP_VISIBLE_DEVICES: HSA_OVERRIDE_GFX_VERSION: HTTPS_PROXY: HTTP_PROXY: LLAMA_ARG_FIT: LLAMA_ARG_FIT_TARGET: NO_PROXY: OLLAMA_CONTEXT_LENGTH:0 OLLAMA_DEBUG:INFO OLLAMA_DEBUG_LOG_REQUESTS:false OLLAMA_EDITOR: OLLAMA_FLASH_ATTENTION:false OLLAMA_GO_TEMPLATE:true OLLAMA_GPU_OVERHEAD:0 OLLAMA_HOST:http://127.0.0.1:11434 OLLAMA_IGPU_ENABLE: OLLAMA_KEEP_ALIVE:5m0s OLLAMA_KV_CACHE_TYPE: OLLAMA_LLM_LIBRARY: OLLAMA_LOAD_TIMEOUT:5m0s OLLAMA_MAX_LOADED_MODELS:0 OLLAMA_MAX_QUEUE:512 OLLAMA_MAX_TRANSFER_STREAMS:4 OLLAMA_MODELS:/home/irk/.ollama/models OLLAMA_NOHISTORY:false OLLAMA_NOPRUNE:false OLLAMA_NO_CLOUD:false OLLAMA_NUM_PARALLEL:1 OLLAMA_ORIGINS:[http://localhost https://localhost http://localhost:* https://localhost:* http://127.0.0.1 https://127.0.0.1 http://127.0.0.1:* https://127.0.0.1:* http://0.0.0.0 https://0.0.0.0 http://0.0.0.0:* https://0.0.0.0:* app://* file://* tauri://* vscode-webview://* vscode-file://*] OLLAMA_REMOTES:[ollama.com] OLLAMA_SCHED_SPREAD:false OLLAMA_VULKAN:true ROCR_VISIBLE_DEVICES: http_proxy: https_proxy: no_proxy:]"
+> time=2026-09-08T20:16:28.676+05:30 level=INFO source=routes.go:1957 msg="Ollama cloud disabled: false"
+> time=2026-09-08T20:16:28.677+05:30 level=INFO source=images.go:957 msg="total blobs: 0"
+> time=2026-09-08T20:16:28.677+05:30 level=INFO source=images.go:964 msg="total unused blobs removed: 0"
+> time=2026-09-08T20:16:28.677+05:30 level=INFO source=routes.go:2012 msg="Listening on 127.0.0.1:11434 (version 0.33.3)"
+> time=2026-09-08T20:16:28.677+05:30 level=INFO source=model_list_cache.go:112 msg="model list cache hydration complete" models=0 failures=0 elapsed=267.657µs
+> time=2026-09-08T20:16:28.677+05:30 level=INFO source=runner.go:60 msg="discovering available GPUs..."
+> time=2026-09-08T20:16:29.215+05:30 level=INFO source=model_recommendations.go:177 msg="model recommendations cache sleep scheduled" wait=3h44m55.641271451s consecutive_failures=0
+> time=2026-09-08T20:16:30.497+05:30 level=INFO source=runner.go:405 msg="dropping integrated GPU; to enable, set OLLAMA_IGPU_ENABLE=1" id=1 library=Vulkan compute=0.0 name=Vulkan1 description="AMD Ryzen 9 7900X 12-Core Processor (RADV RAPHAEL_MENDOCINO)" pci_id=0000:13:00.0
+> time=2026-09-08T20:16:31.300+05:30 level=INFO source=types.go:32 msg="inference compute" id=0 filter_id=0 library=CUDA compute=12.0 name=CUDA0 description="NVIDIA GeForce RTX 5070 Ti" libdirs=ollama,cuda_v13 driver=13.2 pci_id=0000:01:00.0 type=discrete total="15.5 GiB" available="14.4 GiB"
+> time=2026-09-08T20:16:31.300+05:30 level=INFO source=routes.go:2062 msg="vram-based default context" total_vram="15.5 GiB" default_num_ctx=4096...superjoin-proj on  evidence-mining-and-labelling [$!] via  v3.14.4 
+> ❯ cd deploy && sudo docker compose --env-file ../.env down -v && cd ..
+> python3 run_pipeline.py --setup-only
+> [sudo: authenticate] Password:         
+> [+] down 7/7
+>  ✔️ Container facts-mongo3             Removed                                                                  0.1s
+>  ✔️ Container facts-mongo1             Removed                                                                  0.1s
+>  ✔️ Container facts-mongo2             Removed                                                                  0.1s
+>  ✔️ Volume superjoin-facts_mongo2-data Removed                                                                  0.0s
+>  ✔️ Volume superjoin-facts_mongo3-data Removed                                                                  0.0s
+>  ✔️ Volume superjoin-facts_mongo1-data Removed                                                                  0.0s
+>  ✔️ Network superjoin-facts_default    Removed                                                                  0.1s
+> ==> creating .venv
+> ==> re-running inside /home/irk/Desktop/project run/mani/superjoin-proj/.venv/bin/python
+> ==> starting the Docker daemon
+> ==> using sudo for docker (group membership needs a re-login)
+> ==> installing Python dependencies
+> ==> starting MongoDB replica set
+>     normalising line endings in bootstrap.sh
+> ==> starting three mongod nodes
+> [+] up 18/18
+>  ✔️ Image mongo:7                      Pulled                                                                  45.5s
+>  ✔️ Volume superjoin-facts_mongo3-data Created                                                                  0.0s
+>  ✔️ Volume superjoin-facts_mongo2-data Created                                                                  0.0s
+>  ✔️ Network superjoin-facts_default    Created                                                                  0.0s
+>  ✔️ Volume superjoin-facts_mongo1-data Created                                                                  0.0s
+>  ✔️ Container facts-mongo3             Started                                                                  0.9s
+>  ✔️ Container facts-mongo2             Started                                                                  1.1s
+>  ✔️ Container facts-mongo1             Started                                                                  1.0s
+> ==> waiting for mongo1 to accept authenticated connections
+> ==> initiating replica set
+> initiated
+> ==> waiting for a primary
+> ==> applying roles and users
+> rs0 [direct: primary] test> 
+> rs0 [direct: primary] test> 
+> rs0 [direct: primary] test> 
+> rs0 [direct: primary] test> 
+> rs0 [direct: primary] test> 
+> rs0 [direct: primary] test> 
+> rs0 [direct: primary] test> 
+> rs0 [direct: primary] test> 
+> rs0 [direct: primary] test> 
+> rs0 [direct: primary] test> 
+> rs0 [direct: primary] test> 
+> rs0 [direct: primary] test> 
+> rs0 [direct: primary] test> 
+> rs0 [direct: primary] test> 
+> rs0 [direct: primary] test> 
+> rs0 [direct: primary] test> 
+> rs0 [direct: primary] test> 
+> rs0 [direct: primary] test> 
+> rs0 [direct: primary] test> 
+> rs0 [direct: primary] test> 
+> rs0 [direct: primary] factlayer> 
+> rs0 [direct: primary] factlayer> | | | | | | | | | | [Function: upsertRole]
+> rs0 [direct: primary] factlayer> 
+> rs0 [direct: primary] factlayer> | | | | | | | | | | [Function: upsertUser]
+> rs0 [direct: primary] factlayer> 
+> rs0 [direct: primary] factlayer> | | | | | | | created role factsWriter
+>
+> rs0 [direct: primary] factlayer> 
+> rs0 [direct: primary] factlayer> | | | | | | created role factsReader
+>
+> rs0 [direct: primary] factlayer> 
+> rs0 [direct: primary] factlayer> created user facts_app
+>
+> rs0 [direct: primary] factlayer> created user facts_ro
+>
+> rs0 [direct: primary] factlayer> 
+> rs0 [direct: primary] factlayer> 
+> RBAC applied on factlayer. Users: facts_app, facts_ro
+>
+> rs0 [direct: primary] factlayer> ==> replica set members
+>    mongo1:27017  PRIMARY
+>    mongo2:27017  SECONDARY
+>    mongo3:27017  SECONDARY
+>
+> Replica set rs0 is up on 27017/27018/27019. TLS required, RBAC on.
+> The application connection string is in ../.env (gitignored).
+> ==> checking Ollama at http://127.0.0.1:12345
+> ==> starting the Ollama service
+>
+> [stop] Ollama is not answering at http://127.0.0.1:12345
+>        Start it with ollama serve. On Windows the default port 11434 can fall inside a reserved range once Docker is running - if it refuses to bind, run OLLAMA_HOST=127.0.0.1:12345 ollama serve and put OLLAMA_HOST=127.0.0.1:12345 in .env.
+>
+> superjoin-proj on  evidence-mining-and-labelling [$!] via  v3.14.4 took 2m12s 
+> Ensure that all of the deps and evth works properly on windows 11 as well as Ubuntu 26.04 LTS
+
+*[Claude ran 31 tools: Bash ×24, Edit ×5, Read ×1, SendUserFile ×1]*
+
+**Claude:**
+
+Three portability defects, all from the same root: `.env` mixes portable secrets with machine-specific values, and your friend **copied** the folder from Windows rather than cloning it — so they inherited yours.
+
+Now the Ollama host, which is the failure your friend actually hit:
+
+Pushed as `edf35cf`. **MongoDB now works on Ubuntu 26.04** — that log shows `mongo:7` pulled, three nodes up, replica set elected, RBAC applied. The kernel fix held.
+
+The Ollama failure was mine, not their machine's.
+
+## Root cause: `.env` is machine-specific, and they have a copy of yours
+
+Your friend copied the folder from Windows rather than cloning (that's also where the CRLF came from). `.env` is gitignored and generated per machine, so they inherited yours:
+
+```
+OLLAMA_HOST=127.0.0.1:12345
+MONGO_URI=...&tlsCAFile=<project>/deploy/tls/ca.crt&...
+```
+
+`12345` only exists because Hyper-V claims 11434 on your box once Docker Desktop starts. On Ubuntu the default port is fine — so the runner sat probing a port nothing was ever going to answer on, ~50cm from a healthy Ollama on 11434.
+
+**The second line is worse and hadn't fired yet.** That CA path doesn't exist on their machine, so every pymongo connection would fail at the TLS handshake — *after* setup reported success, because setup talks to mongod through `mongosh` inside the container and never touches the driver path. They'd have hit it the moment they opened the UI.
+
+## Fixes
+
+| | |
+|---|---|
+| `bootstrap.sh` | rewrites `MONGO_URI` every run instead of keeping whatever is there — verified idempotent, no duplicate lines, `.env` stays `600` |
+| `run_pipeline.py` | a silent `OLLAMA_HOST` falls back to the default port and drops the stale line, since uvicorn reads `.env` in a separate process |
+| `run_pipeline.py` | prefers Git for Windows' bash over `C:\Windows\System32\bash.exe`, which is the WSL launcher — a default Windows install puts only `git.exe` on PATH, so `which bash` finds the shim, which would run `bootstrap.sh` inside a distro with no Docker and no project |
+| hint text | says the thing that applies to the platform it prints on |
+
+Verified: the retune against a stand-in server (stale host dropped, live one adopted, rest of `.env` intact, no-op when healthy), the URI rewrite, `bash -n`, `posix_bash()` resolving here, and all three self-checks.
+
+## One thing to tell your friend
+
+**Your generated passwords are on their machine** and provisioned their cluster. It's a local-only dev cluster with no exposure, so this is housekeeping rather than an incident — but `rm .env` before their next run gets them their own, and yours stop existing elsewhere. It's in the updated instructions.
+
+## What I still can't claim
+
+I've verified Windows directly and reasoned about Linux from the diagnostics. Everything through the model download is now proven on their box across three runs; **labelling running to completion is not** — that's what this run tests. Given I've been wrong twice about this environment already, that's the honest boundary.
 
 ---

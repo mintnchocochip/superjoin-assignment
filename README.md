@@ -51,10 +51,9 @@ python run.py
 That installs the four dependencies, starts the server, and opens
 <http://127.0.0.1:8000>. There is no database to install, no container to start,
 no model to download, and no API key to obtain — it uses the `claude` CLI already
-on your machine. If you would rather run the pieces yourself:
-
+on your machine. 
 ```bash
-pip install -r requirements.txt && uvicorn app:app
+cd A:/superjoin-simple && GROQ_API_KEY=your_key python -m uvicorn app:app --port 8000
 ```
 
 Drop PDFs on the page and watch the Documents tab: the status counts pages as

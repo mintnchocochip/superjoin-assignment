@@ -1,5 +1,4 @@
 fastapi
-pymongo
+uvicorn
 pymupdf
 python-multipart
-uvicorn

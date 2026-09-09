@@ -6,668 +6,210 @@
 <title>Fact Knowledge Layer</title>
 <style>
   :root {
-    --bg: #fbfbfa; --panel: #ffffff; --line: #e4e4e1; --ink: #1c1c1a;
-    --muted: #74746e; --accent: #2563eb; --accent-soft: #dbeafe;
-    --warn: #b45309; --warn-soft: #fef3c7;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #17171a; --panel: #1e1e22; --line: #33333a; --ink: #ececf0;
-      --muted: #9a9aa4; --accent: #7aa2f7; --accent-soft: #1e2c4a;
-      --warn: #e0a458; --warn-soft: #3a2f1c;
-    }
+    --bg: #f6f7f9; --card: #fff; --line: #e2e5ea; --ink: #1a1d21; --dim: #6b7280;
+    --accent: #2563eb; --green: #0f7b46; --red: #b42318; --amber: #b45309;
   }
   * { box-sizing: border-box; }
-  body {
-    margin: 0; background: var(--bg); color: var(--ink);
-    font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  }
-  header {
-    padding: 14px 20px; border-bottom: 1px solid var(--line);
-    display: flex; align-items: baseline; gap: 12px; background: var(--panel);
-  }
-  header h1 { font-size: 15px; margin: 0; font-weight: 600; }
-  header span { color: var(--muted); font-size: 12.5px; }
-  main { display: grid; grid-template-columns: 300px 1fr; min-height: calc(100vh - 51px); }
-  aside { border-right: 1px solid var(--line); padding: 16px; background: var(--panel); }
-  section { padding: 16px 20px; min-width: 0; }
-
-  #drop {
-    border: 1.5px dashed var(--line); border-radius: 8px; padding: 20px 12px;
-    text-align: center; color: var(--muted); cursor: pointer; font-size: 13px;
-    transition: border-color .15s, background .15s;
-  }
-  #drop:hover, #drop.over { border-color: var(--accent); background: var(--accent-soft); color: var(--ink); }
-
-  .doc {
-    padding: 9px 10px; border-radius: 6px; cursor: pointer; margin-top: 6px;
-    border: 1px solid transparent;
-  }
-  .doc:hover { background: var(--accent-soft); }
-  .doc.on { background: var(--accent-soft); border-color: var(--accent); }
-  .doc b { display: block; font-weight: 550; word-break: break-word; font-size: 13px; }
-  .doc small { color: var(--muted); font-size: 11.5px; }
-  .doc.unconfirmed { border-color: var(--warn); }
-  .corpus { display: flex; gap: 5px; align-items: center; margin-top: 6px; flex-wrap: wrap; }
-  .corpus .tag {
-    background: var(--accent-soft); color: var(--ink); border-radius: 4px;
-    padding: 1px 6px; font-size: 11.5px;
-  }
-  .corpus .tag.pending { background: var(--warn-soft); color: var(--warn); }
-  .corpus button {
-    border: 1px solid var(--line); background: var(--panel); color: var(--ink);
-    border-radius: 4px; padding: 1px 7px; font: inherit; font-size: 11.5px; cursor: pointer;
-  }
-  .corpus button:hover { border-color: var(--accent); color: var(--accent); }
-  .bar { height: 4px; border-radius: 3px; background: var(--line); margin-top: 7px; overflow: hidden; }
-  .bar > i { display: block; height: 100%; background: var(--accent); transition: width .4s; }
-  .stage {
-    display: flex; justify-content: space-between; gap: 8px; margin-top: 5px;
-    color: var(--accent); font-size: 11.5px;
-  }
-  .stage.failed { color: var(--warn); }
-  .stage b { font-weight: 600; }
-  @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .45 } }
-  .working { animation: pulse 1.4s ease-in-out infinite; }
-
-  .controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
-  input[type=text], input[type=number] {
-    background: var(--panel); color: var(--ink); border: 1px solid var(--line);
-    border-radius: 6px; padding: 6px 9px; font: inherit; font-size: 13px;
-  }
-  input[type=text] { flex: 1; min-width: 180px; }
-  input[type=number] { width: 92px; }
-  label.chk { display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 13px; cursor: pointer; }
-
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 15px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { background: var(--card); border-bottom: 1px solid var(--line); padding: 18px 28px; }
+  h1 { margin: 0; font-size: 19px; letter-spacing: -.01em; }
+  header p { margin: 4px 0 0; color: var(--dim); font-size: 13px; }
+  main { max-width: 1180px; margin: 0 auto; padding: 24px 28px 80px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+          padding: 18px; margin-bottom: 18px; }
+  .tabs { display: flex; gap: 6px; margin-bottom: 18px; }
+  .tabs button { background: none; border: 1px solid transparent; border-radius: 8px;
+                 padding: 8px 14px; font: inherit; color: var(--dim); cursor: pointer; }
+  .tabs button.on { background: var(--card); border-color: var(--line); color: var(--ink); font-weight: 600; }
+  button.primary { background: var(--accent); color: #fff; border: 0; border-radius: 8px;
+                   padding: 9px 16px; font: inherit; cursor: pointer; }
+  button.primary:disabled { opacity: .5; cursor: default; }
+  input, select { font: inherit; padding: 8px 10px; border: 1px solid var(--line);
+                  border-radius: 8px; background: #fff; }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
   table { width: 100%; border-collapse: collapse; }
-  th {
-    text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .05em;
-    color: var(--muted); font-weight: 600; padding: 6px 8px; border-bottom: 1px solid var(--line);
-  }
-  td { padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
-  tr:hover td { background: var(--accent-soft); }
-  .pg { white-space: nowrap; color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12.5px; }
-  .val { white-space: nowrap; font-weight: 600; font-variant-numeric: tabular-nums; }
-  .ev { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; word-break: break-word; }
-  .ev mark { background: var(--accent-soft); color: var(--ink); font-weight: 700; border-radius: 2px; padding: 0 2px; }
-  .why { color: var(--warn); background: var(--warn-soft); border-radius: 4px; padding: 1px 6px; font-size: 11.5px; white-space: nowrap; }
-  .lbl {
-    font-family: ui-sans-serif, system-ui, sans-serif; color: var(--muted);
-    border-right: 2px solid var(--line); padding-right: 7px; margin-right: 5px;
-  }
-  .lbl::before { content: "row: "; opacity: .65; }
-  .metric { font-weight: 600; display: block; }
-  .qual { color: var(--muted); font-size: 12px; }
-  .qual b { font-weight: 600; color: var(--accent); }
-  .none { color: var(--muted); font-style: italic; font-size: 12.5px; }
-  .no { opacity: .45; }
-  #label {
-    width: 100%; margin-top: 14px; padding: 8px; border-radius: 6px; cursor: pointer;
-    background: var(--accent); color: #fff; border: 0; font: inherit; font-weight: 600;
-  }
-  #label:disabled { opacity: .4; cursor: default; }
-  #lstat { color: var(--muted); font-size: 12px; margin-top: 6px; min-height: 16px; }
-  select {
-    background: var(--panel); color: var(--ink); border: 1px solid var(--line);
-    border-radius: 6px; padding: 6px 8px; font: inherit; font-size: 13px;
-  }
-  .empty { color: var(--muted); padding: 32px 8px; text-align: center; }
-  .tabs { display: flex; gap: 6px; align-items: center; margin-bottom: 14px; }
-  .tab {
-    border: 1px solid var(--line); background: var(--panel); color: var(--muted);
-    border-radius: 6px; padding: 5px 12px; font: inherit; font-size: 13px; cursor: pointer;
-  }
-  .tab.on { border-color: var(--accent); color: var(--accent); font-weight: 600; }
-  #readjudicate {
-    border: 1px solid var(--line); background: var(--panel); color: var(--ink);
-    border-radius: 6px; padding: 5px 10px; font: inherit; font-size: 12.5px; cursor: pointer;
-  }
-  .finding { border: 1px solid var(--line); border-radius: 8px; margin-bottom: 12px; overflow: hidden; }
-  .finding header {
-    padding: 8px 12px; border-bottom: 1px solid var(--line); gap: 8px;
-    display: flex; align-items: baseline; flex-wrap: wrap; background: transparent;
-  }
-  .finding .metric { font-weight: 650; font-size: 13.5px; display: inline; }
-  .finding .why { white-space: normal; }
-  .sides { display: grid; grid-template-columns: 1fr 1fr; }
-  .side { padding: 10px 12px; min-width: 0; }
-  .side + .side { border-left: 1px solid var(--line); }
-  .side .num { font-size: 17px; font-weight: 650; font-variant-numeric: tabular-nums; }
-  .side .src { color: var(--muted); font-size: 11.5px; margin-top: 2px; word-break: break-word; }
-  .side .q {
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px;
-    margin-top: 6px; color: var(--ink); word-break: break-word;
-  }
-  .badge { border-radius: 4px; padding: 1px 8px; font-size: 11.5px; font-weight: 600; }
-  .b-corroborates { background: #dcfce7; color: #14532d; }
-  .b-contradicts { background: #fee2e2; color: #7f1d1d; }
-  .b-reconcilable { background: #fef3c7; color: #78350f; }
-  @media (prefers-color-scheme: dark) {
-    .b-corroborates { background: #14532d; color: #dcfce7; }
-    .b-contradicts { background: #7f1d1d; color: #fee2e2; }
-    .b-reconcilable { background: #78350f; color: #fef3c7; }
-  }
-  @media (max-width: 900px) {
-    .sides { grid-template-columns: 1fr; }
-    .side + .side { border-left: 0; border-top: 1px solid var(--line); }
-  }
-  .wrap { overflow-x: auto; }
-  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 20px 0 4px; }
+  th { text-align: left; font-size: 12px; text-transform: uppercase; letter-spacing: .04em;
+       color: var(--dim); padding: 8px 10px; border-bottom: 1px solid var(--line); }
+  td { padding: 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr:last-child td { border-bottom: 0; }
+  .quote { color: var(--dim); font-size: 13px; border-left: 3px solid var(--line);
+           padding-left: 10px; margin-top: 6px; }
+  .tag { display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 999px;
+         background: #eef1f5; color: var(--dim); margin-right: 6px; }
+  .badge { font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 999px; }
+  .corroborates { background: #e6f5ed; color: var(--green); }
+  .contradicts  { background: #fdeceb; color: var(--red); }
+  .reconcilable { background: #fdf3e3; color: var(--amber); }
+  .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 12px; }
+  .pair > div { background: #fafbfc; border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+  .why { margin-top: 12px; font-size: 14px; }
+  .why b { color: var(--dim); font-weight: 600; text-transform: uppercase; font-size: 11px;
+           letter-spacing: .05em; display: block; margin-bottom: 3px; }
+  a { color: var(--accent); text-decoration: none; }
+  .muted { color: var(--dim); font-size: 13px; }
+  .empty { text-align: center; color: var(--dim); padding: 40px 0; }
+  @media (max-width: 720px) { .pair { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
 <header>
   <h1>Fact Knowledge Layer</h1>
-  <span id="phase"></span>
+  <p id="config">Upload PDFs, get facts grounded in quotes and linked across documents.</p>
 </header>
 
 <main>
-  <aside>
-    <div id="drop">Drop a PDF here<br>or click to choose</div>
-    <input type="file" id="file" accept="application/pdf" hidden>
-    <h2>Documents</h2>
-    <div id="docs"></div>
-    <button id="label" disabled>Label with model</button>
-    <div id="lstat"></div>
-  </aside>
-
-  <section>
-    <div class="tabs">
-      <button class="tab on" data-view="evidence">Evidence</button>
-      <button class="tab" data-view="findings">Findings</button>
-      <span id="fcount" style="color:var(--muted);font-size:12.5px"></span>
+  <div class="card">
+    <div class="row">
+      <input type="file" id="files" accept="application/pdf" multiple>
+      <label class="muted">first <input type="number" id="pages" value="20" min="0" style="width:70px"> pages (0 = all)</label>
+      <button class="primary" id="go">Process</button>
+      <span class="muted" id="msg"></span>
     </div>
+  </div>
 
-    <div id="view-findings" hidden>
-      <div class="controls">
-        <label class="chk"><input type="radio" name="ft" value="" checked> all</label>
-        <label class="chk"><input type="radio" name="ft" value="corroborates"> corroborates</label>
-        <label class="chk"><input type="radio" name="ft" value="contradicts"> contradicts</label>
-        <label class="chk"><input type="radio" name="ft" value="reconcilable"> reconcilable</label>
-        <label class="chk"><input type="checkbox" id="xdoc"> cross-document only</label>
-        <button id="readjudicate">re-adjudicate</button>
-      </div>
-      <div id="findings"></div>
-    </div>
+  <div class="tabs">
+    <button data-tab="docs" class="on">Documents</button>
+    <button data-tab="links">Links</button>
+    <button data-tab="facts">Facts</button>
+    <button data-tab="dropped">Dropped</button>
+  </div>
 
-    <div id="view-evidence">
-    <div class="controls">
-      <input type="text" id="q" placeholder="Filter evidence lines…">
-      <input type="number" id="page" placeholder="Page" min="0">
-      <label class="chk"><input type="checkbox" id="rej"> rejected</label>
-      <label class="chk"><input type="checkbox" id="only"> facts only</label>
-      <select id="kind">
-        <option value="">all evidence</option>
-        <option value="number">numbers</option>
-        <option value="text">text</option>
+  <div id="docs" class="tab"></div>
+
+  <div id="links" class="tab" hidden>
+    <div class="row" style="margin-bottom:14px">
+      <select id="rel">
+        <option value="">All relations</option>
+        <option value="corroborates">Corroborates</option>
+        <option value="contradicts">Contradicts</option>
+        <option value="reconcilable">Reconcilable by context</option>
       </select>
-      <span id="count" style="color:var(--muted);font-size:12.5px"></span>
     </div>
-    <div class="wrap"><table>
-      <thead><tr><th>PDF pg</th><th>Value</th><th>Label &middot; model</th><th>Evidence &middot; document</th></tr></thead>
-      <tbody id="rows"></tbody>
-    </table></div>
-    <div id="empty" class="empty">Upload a PDF to see the evidence mined from it.</div>
+    <div id="links-body"></div>
+  </div>
+
+  <div id="facts" class="tab" hidden>
+    <div class="row" style="margin-bottom:14px">
+      <select id="doc"><option value="0">All documents</option></select>
+      <input id="q" placeholder="search subject, value or evidence" style="min-width:280px">
     </div>
-  </section>
+    <div id="facts-body"></div>
+  </div>
+
+  <div id="dropped" class="tab" hidden>
+    <p class="muted">Facts the model returned with a quote that is not actually on the page.
+      They are stored but never linked - this is the extraction-failure case, made visible
+      instead of silently trusted.</p>
+    <div id="dropped-body"></div>
+  </div>
 </main>
 
 <script>
 const $ = s => document.querySelector(s);
-let current = null;
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const get = async (url) => (await fetch(url)).json();
+const src = f => `<a href="/pdf/${f.doc_id}#page=${f.page}" target="_blank">${esc(f.doc)} · p.${f.page}</a>`;
 
-const esc = s => s.replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+get("/api/config").then(c => $("#config").textContent =
+  `Facts grounded in verbatim quotes, linked across documents. Model: ${c.model} via ${c.backend}.`);
 
-function highlight(row) {
-  const { text, char_start: a, char_end: b } = row;
-  if (a == null || b == null || a < 0 || b > text.length || a >= b) return esc(text);
-  return esc(text.slice(0, a)) + '<mark>' + esc(text.slice(a, b)) + '</mark>' + esc(text.slice(b));
-}
-
-const BUSY = ['queued', 'reading', 'storing evidence', 'identifying', 'labelling'];
-
-function progress(d) {
-  const state = d.state || '';
-  if (state === 'failed') {
-    return `<div class="stage failed"><b>failed</b><span>${esc(d.error || '')}</span></div>`;
-  }
-  if (!BUSY.includes(state)) return '';
-  const { done = 0, total = 0 } = d.progress || {};
-  const pct = total ? Math.round((done / total) * 100) : 0;
-  return `
-    <div class="stage working"><b>${esc(state)}…</b>
-      <span>${total ? `${done} / ${total}` : ''}</span></div>
-    <div class="bar"><i style="width:${total ? pct : 12}%"></i></div>`;
-}
-
-// Poll quickly while something is working, slowly when nothing is.
-let timer = null;
-function schedule(docs) {
-  clearTimeout(timer);
-  const busy = docs.some(d => BUSY.includes(d.state || ''));
-  timer = setTimeout(loadDocs, busy ? 1500 : 15000);
-}
-
-async function loadDocs() {
-  const docs = await (await fetch('/api/documents')).json();
-  schedule(docs);
-  $('#docs').innerHTML = docs.map(d => `
-    <div class="doc ${d.id === current ? 'on' : ''}" data-id="${d.id}">
-      <b>${esc(d.filename)}</b>
-      <small>${d.page_count}p · ${d.accepted} evidence · ${d.labelled} labelled · ${d.facts} facts</small>
-      ${progress(d)}
-      <div class="corpus">
-        <span class="tag ${d.corpus_confirmed ? '' : 'pending'}">${
-          esc(d.corpus_name || d.proposed_subject || 'unidentified')}</span>
-        <span class="tag">${esc(d.doc_type || 'other')}</span>
-        ${d.corpus_confirmed ? '' : '<button data-confirm="' + d.id + '">confirm</button>'}
-        <button data-reassign="${d.id}">reassign</button>
-      </div>
-    </div>`).join('') || '<div class="empty" style="padding:12px 0">None yet</div>';
-
-  document.querySelectorAll('.doc').forEach(el =>
-    el.onclick = e => {
-      if (e.target.dataset.confirm || e.target.dataset.reassign) return;
-      current = el.dataset.id; // --- findings -------------------------------------------------------------
-
-function side(c) {
-  const value = [c.currency, c.value, c.unit].filter(Boolean).join(' ') || '—';
-  const quals = ['period', 'basis', 'vintage', 'scope']
-    .filter(k => c[k]).map(k => `${k}: ${c[k]}`).join(' · ');
-  const page = c.printed_page ? `p.${c.printed_page} (pdf ${c.pdf_page})` : `pdf p.${c.pdf_page}`;
-  return `<div class="side">
-    <div class="num">${esc(value)}</div>
-    <div class="src">${esc(c.filename || c.doc_id)} · ${esc(page)}${
-      quals ? ' · ' + esc(quals) : ''}</div>
-    <div class="q">${esc(c.quote || '')}</div>
-  </div>`;
-}
-
-async function loadFindings() {
-  const type = document.querySelector('input[name=ft]:checked').value;
-  const p = new URLSearchParams({ type, cross_document: $('#xdoc').checked ? 1 : 0 });
-  const rows = await (await fetch(`/api/findings?${p}`)).json();
-
-  $('#fcount').textContent = rows.length ? `${rows.length} shown` : '';
-  if (!rows.length) {
-    $('#findings').innerHTML = '<div class="empty">No findings yet. Label at least two ' +
-      'documents in the same corpus, then re-adjudicate.</div>';
-    return;
-  }
-  $('#findings').innerHTML = rows.map(f => `
-    <div class="finding">
-      <header>
-        <span class="badge b-${f.type}">${f.type}</span>
-        <span class="metric">${esc(f.metric || f.group_key)}</span>
-        <span class="qual">${esc(f.subject || '')}</span>
-        ${f.cross_document ? '<span class="qual">across documents</span>' : ''}
-        ${f.dimension ? `<span class="qual">by ${esc(f.dimension)}</span>` : ''}
-        <span class="why">${esc(f.reason || '')}</span>
-      </header>
-      <div class="sides">${side(f.a)}${side(f.b)}</div>
-    </div>`).join('');
-}
-
-document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
-  document.querySelectorAll('.tab').forEach(x => x.classList.toggle('on', x === t));
-  const findings = t.dataset.view === 'findings';
-  $('#view-findings').hidden = !findings;
-  $('#view-evidence').hidden = findings;
-  if (findings) loadFindings();
+document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => {
+  document.querySelectorAll(".tabs button").forEach(x => x.classList.toggle("on", x === b));
+  document.querySelectorAll(".tab").forEach(t => t.hidden = t.id !== b.dataset.tab);
+  refresh();
 });
-document.querySelectorAll('input[name=ft]').forEach(r => r.onchange = loadFindings);
-$('#xdoc').onchange = loadFindings;
-$('#readjudicate').onclick = async () => {
-  $('#fcount').textContent = 'adjudicating…';
-  const r = await (await fetch('/api/adjudicate', { method: 'POST' })).json();
-  $('#fcount').textContent = `${r.groups_adjudicated} groups`;
-  await loadFindings();
-};
 
-loadDocs(); loadRows();
-    });
-
-  document.querySelectorAll('[data-confirm]').forEach(b =>
-    b.onclick = async () => { await assignCorpus(b.dataset.confirm, ''); });
-
-  document.querySelectorAll('[data-reassign]').forEach(b =>
-    b.onclick = async () => {
-      const known = (await (await fetch('/api/corpora')).json()).map(c => c.name);
-      const name = prompt(
-        'Entity this document is about.' +
-        (known.length ? ' Existing: ' + known.join(', ') : ''), '');
-      if (name) await assignCorpus(b.dataset.reassign, name);
-    });
-
-  // Grouping comes first: nothing is labelled under a corpus nobody confirmed.
-  const doc = docs.find(d => d.id === current);
-  const busy = doc && BUSY.includes(doc.state || '');
-  $('#label').disabled = !current || busy || !(doc && doc.corpus_confirmed);
-  if (doc && busy) $('#lstat').textContent = `${doc.state}…`;
-  else if (doc && !doc.corpus_confirmed) $('#lstat').textContent = 'confirm the corpus first';
-}
-
-async function loadRows() {
-  if (!current) return;
-  const p = new URLSearchParams({
-    accepted: $('#rej').checked ? 0 : 1,
-    q: $('#q').value.trim(),
-    kind: $('#kind').value,
-    labelled: $('#only').checked ? 1 : -1,
-    page: $('#page').value === '' ? -1 : $('#page').value,
-  });
-  const rows = await (await fetch(`/api/documents/${current}/evidence?${p}`)).json();
-
-  $('#empty').style.display = rows.length ? 'none' : 'block';
-  $('#empty').textContent = rows.length ? '' : 'Nothing matches those filters.';
-  $('#count').textContent = rows.length ? `${rows.length} shown` : '';
-
-  $('#rows').innerHTML = rows.map(r => {
-    const qual = [r.period, r.basis].filter(Boolean).map(x => `<b>${esc(x)}</b>`).join(' · ');
-    const label = r.model
-      ? `<span class="metric">${esc(r.metric || '—')}</span>
-         <span class="qual">${esc(r.subject || '')}${qual ? ' · ' + qual : ''}</span>`
-      : '<span class="none">unlabelled</span>';
-    return `
-    <tr class="${r.model && !r.is_fact ? 'no' : ''}">
-      <td class="pg">${r.pdf_page}${r.printed_page ? `<br><small>p.${esc(r.printed_page)}</small>` : ''}</td>
-      <td class="val">${esc([r.currency, r.value, r.unit].filter(Boolean).join(' ')) || '—'}</td>
-      <td>${label}</td>
-      <td class="ev">${r.row_label ? `<span class="lbl">${esc(r.row_label)}</span> ` : ''}${highlight(r)}${
-        r.reject_reason ? ` <span class="why">${esc(r.reject_reason)}</span>` : ''}</td>
-    </tr>`; }).join('');
-}
-
-async function assignCorpus(id, name) {
-  const p = new URLSearchParams(name ? { name } : {});
-  const r = await (await fetch(`/api/documents/${id}/corpus?${p}`, { method: 'POST' })).json();
-  if (r.detail) { $('#lstat').textContent = r.detail; return; }
-  $('#lstat').textContent = `${r.corpus_id} · ${r.claims_rekeyed} claims re-keyed`;
-  await // --- findings -------------------------------------------------------------
-
-function side(c) {
-  const value = [c.currency, c.value, c.unit].filter(Boolean).join(' ') || '—';
-  const quals = ['period', 'basis', 'vintage', 'scope']
-    .filter(k => c[k]).map(k => `${k}: ${c[k]}`).join(' · ');
-  const page = c.printed_page ? `p.${c.printed_page} (pdf ${c.pdf_page})` : `pdf p.${c.pdf_page}`;
-  return `<div class="side">
-    <div class="num">${esc(value)}</div>
-    <div class="src">${esc(c.filename || c.doc_id)} · ${esc(page)}${
-      quals ? ' · ' + esc(quals) : ''}</div>
-    <div class="q">${esc(c.quote || '')}</div>
-  </div>`;
-}
-
-async function loadFindings() {
-  const type = document.querySelector('input[name=ft]:checked').value;
-  const p = new URLSearchParams({ type, cross_document: $('#xdoc').checked ? 1 : 0 });
-  const rows = await (await fetch(`/api/findings?${p}`)).json();
-
-  $('#fcount').textContent = rows.length ? `${rows.length} shown` : '';
-  if (!rows.length) {
-    $('#findings').innerHTML = '<div class="empty">No findings yet. Label at least two ' +
-      'documents in the same corpus, then re-adjudicate.</div>';
-    return;
-  }
-  $('#findings').innerHTML = rows.map(f => `
-    <div class="finding">
-      <header>
-        <span class="badge b-${f.type}">${f.type}</span>
-        <span class="metric">${esc(f.metric || f.group_key)}</span>
-        <span class="qual">${esc(f.subject || '')}</span>
-        ${f.cross_document ? '<span class="qual">across documents</span>' : ''}
-        ${f.dimension ? `<span class="qual">by ${esc(f.dimension)}</span>` : ''}
-        <span class="why">${esc(f.reason || '')}</span>
-      </header>
-      <div class="sides">${side(f.a)}${side(f.b)}</div>
-    </div>`).join('');
-}
-
-document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
-  document.querySelectorAll('.tab').forEach(x => x.classList.toggle('on', x === t));
-  const findings = t.dataset.view === 'findings';
-  $('#view-findings').hidden = !findings;
-  $('#view-evidence').hidden = findings;
-  if (findings) loadFindings();
-});
-document.querySelectorAll('input[name=ft]').forEach(r => r.onchange = loadFindings);
-$('#xdoc').onchange = loadFindings;
-$('#readjudicate').onclick = async () => {
-  $('#fcount').textContent = 'adjudicating…';
-  const r = await (await fetch('/api/adjudicate', { method: 'POST' })).json();
-  $('#fcount').textContent = `${r.groups_adjudicated} groups`;
-  await loadFindings();
-};
-
-loadDocs();
-}
-
-async function upload(f) {
-  $('#drop').textContent = `Mining ${f.name}…`;
+$("#go").onclick = async () => {
+  const files = $("#files").files;
+  if (!files.length) return ($("#msg").textContent = "Choose at least one PDF.");
   const body = new FormData();
-  body.append('file', f);
+  for (const f of files) body.append("files", f);
+  body.append("max_pages", $("#pages").value || "0");
+  $("#go").disabled = true;
+  $("#msg").textContent = "Uploading…";
   try {
-    const r = await (await fetch('/api/documents', { method: 'POST', body })).json();
-    $('#drop').innerHTML = r.duplicate
-      ? 'Already uploaded — showing existing.'
-      : 'Reading it now — progress is on the left.';
-    current = r.doc_id;
-    await // --- findings -------------------------------------------------------------
+    const r = await fetch("/api/upload", { method: "POST", body });
+    if (!r.ok) throw new Error((await r.json()).detail || r.statusText);
+    $("#msg").textContent = "Queued. Processing runs in the background.";
+    $("#files").value = "";
+  } catch (e) { $("#msg").textContent = "Failed: " + e.message; }
+  $("#go").disabled = false;
+  refresh();
+};
 
-function side(c) {
-  const value = [c.currency, c.value, c.unit].filter(Boolean).join(' ') || '—';
-  const quals = ['period', 'basis', 'vintage', 'scope']
-    .filter(k => c[k]).map(k => `${k}: ${c[k]}`).join(' · ');
-  const page = c.printed_page ? `p.${c.printed_page} (pdf ${c.pdf_page})` : `pdf p.${c.pdf_page}`;
-  return `<div class="side">
-    <div class="num">${esc(value)}</div>
-    <div class="src">${esc(c.filename || c.doc_id)} · ${esc(page)}${
-      quals ? ' · ' + esc(quals) : ''}</div>
-    <div class="q">${esc(c.quote || '')}</div>
-  </div>`;
-}
+$("#rel").onchange = refresh;
+$("#doc").onchange = refresh;
+$("#q").oninput = debounce(refresh, 300);
+function debounce(fn, ms) { let t; return () => { clearTimeout(t); t = setTimeout(fn, ms); }; }
 
-async function loadFindings() {
-  const type = document.querySelector('input[name=ft]:checked').value;
-  const p = new URLSearchParams({ type, cross_document: $('#xdoc').checked ? 1 : 0 });
-  const rows = await (await fetch(`/api/findings?${p}`)).json();
-
-  $('#fcount').textContent = rows.length ? `${rows.length} shown` : '';
-  if (!rows.length) {
-    $('#findings').innerHTML = '<div class="empty">No findings yet. Label at least two ' +
-      'documents in the same corpus, then re-adjudicate.</div>';
-    return;
+async function refresh() {
+  const docs = await get("/api/documents");
+  renderDocs(docs);
+  const options = ['<option value="0">All documents</option>']
+    .concat(docs.map(d => `<option value="${d.id}">${esc(d.name)}</option>`)).join("");
+  if ($("#doc").innerHTML !== options) {
+    const keep = $("#doc").value; $("#doc").innerHTML = options; $("#doc").value = keep;
   }
-  $('#findings').innerHTML = rows.map(f => `
-    <div class="finding">
-      <header>
-        <span class="badge b-${f.type}">${f.type}</span>
-        <span class="metric">${esc(f.metric || f.group_key)}</span>
-        <span class="qual">${esc(f.subject || '')}</span>
-        ${f.cross_document ? '<span class="qual">across documents</span>' : ''}
-        ${f.dimension ? `<span class="qual">by ${esc(f.dimension)}</span>` : ''}
-        <span class="why">${esc(f.reason || '')}</span>
-      </header>
-      <div class="sides">${side(f.a)}${side(f.b)}</div>
-    </div>`).join('');
+  if (!$("#links").hidden) renderLinks(await get("/api/relations?relation=" + $("#rel").value));
+  if (!$("#facts").hidden)
+    renderFacts("#facts-body", await get(`/api/facts?doc=${$("#doc").value}&q=${encodeURIComponent($("#q").value)}`));
+  if (!$("#dropped").hidden) renderFacts("#dropped-body", await get("/api/facts?grounded=0"));
+  const busy = docs.some(d => d.status !== "done" && d.status !== "failed");
+  clearTimeout(refresh.timer);
+  if (busy) refresh.timer = setTimeout(refresh, 3000);
 }
 
-document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
-  document.querySelectorAll('.tab').forEach(x => x.classList.toggle('on', x === t));
-  const findings = t.dataset.view === 'findings';
-  $('#view-findings').hidden = !findings;
-  $('#view-evidence').hidden = findings;
-  if (findings) loadFindings();
-});
-document.querySelectorAll('input[name=ft]').forEach(r => r.onchange = loadFindings);
-$('#xdoc').onchange = loadFindings;
-$('#readjudicate').onclick = async () => {
-  $('#fcount').textContent = 'adjudicating…';
-  const r = await (await fetch('/api/adjudicate', { method: 'POST' })).json();
-  $('#fcount').textContent = `${r.groups_adjudicated} groups`;
-  await loadFindings();
-};
-
-loadDocs();
-    await loadRows();
-  } catch (e) {
-    $('#drop').textContent = 'Upload failed: ' + e.message;
-  }
-  setTimeout(() => { $('#drop').innerHTML = 'Drop a PDF here<br>or click to choose'; }, 4000);
+function renderDocs(docs) {
+  $("#docs").innerHTML = !docs.length
+    ? `<div class="card empty">No documents yet. Upload a PDF above.</div>`
+    : `<div class="card"><table><tr><th>Document</th><th>Status</th><th>Pages</th>
+         <th>Facts</th><th>Dropped</th></tr>` + docs.map(d => `<tr>
+         <td><a href="/pdf/${d.id}" target="_blank">${esc(d.name)}</a>
+             ${d.note ? `<div class="quote">${esc(d.note)}</div>` : ""}</td>
+         <td>${["done", "failed"].includes(d.status)
+                 ? esc(d.status) : `<b>${esc(d.status)}…</b>`}</td>
+         <td>${d.pages}</td><td>${d.facts}</td><td>${d.dropped}</td></tr>`).join("")
+      + `</table></div>`;
 }
 
-$('#drop').onclick = () => $('#file').click();
-$('#file').onchange = e => e.target.files[0] && upload(e.target.files[0]);
-$('#drop').ondragover = e => { e.preventDefault(); $('#drop').classList.add('over'); };
-$('#drop').ondragleave = () => $('#drop').classList.remove('over');
-$('#drop').ondrop = e => {
-  e.preventDefault();
-  $('#drop').classList.remove('over');
-  if (e.dataTransfer.files[0]) upload(e.dataTransfer.files[0]);
-};
+function factBlock(f, p) {
+  return `<div>
+    <div class="muted">${src({ doc: f[p + "doc"], doc_id: f[p + "doc_id"], page: f[p + "page"] })}</div>
+    <div style="margin-top:6px"><b>${esc(f[p + "subject"])}</b> — ${esc(f[p + "attribute"])}</div>
+    <div style="font-size:17px;margin:4px 0">${esc(f[p + "value"])} ${esc(f[p + "unit"])}</div>
+    ${tags(f[p + "period"], f[p + "scope"])}
+    <div class="quote">“${esc(f[p + "quote"])}”</div></div>`;
+}
+const tags = (period, scope) =>
+  (period ? `<span class="tag">${esc(period)}</span>` : "") +
+  (scope ? `<span class="tag">${esc(scope)}</span>` : "");
 
-let t;
-$('#q').oninput = () => { clearTimeout(t); t = setTimeout(loadRows, 200); };
-$('#page').oninput = () => { clearTimeout(t); t = setTimeout(loadRows, 200); };
-$('#rej').onchange = loadRows;
-$('#kind').onchange = loadRows;
-$('#only').onchange = loadRows;
-
-$('#label').onclick = async () => {
-  $('#label').disabled = true;
-  const r = await (await fetch(`/api/documents/${current}/label`, { method: 'POST' })).json();
-  if (r.detail) { $('#lstat').textContent = r.detail; $('#label').disabled = false; return; }
-  $('#lstat').textContent = `${r.calls} calls for ${r.pending} rows in scope · ${r.model}`;
-  const poll = setInterval(async () => {
-    await // --- findings -------------------------------------------------------------
-
-function side(c) {
-  const value = [c.currency, c.value, c.unit].filter(Boolean).join(' ') || '—';
-  const quals = ['period', 'basis', 'vintage', 'scope']
-    .filter(k => c[k]).map(k => `${k}: ${c[k]}`).join(' · ');
-  const page = c.printed_page ? `p.${c.printed_page} (pdf ${c.pdf_page})` : `pdf p.${c.pdf_page}`;
-  return `<div class="side">
-    <div class="num">${esc(value)}</div>
-    <div class="src">${esc(c.filename || c.doc_id)} · ${esc(page)}${
-      quals ? ' · ' + esc(quals) : ''}</div>
-    <div class="q">${esc(c.quote || '')}</div>
-  </div>`;
+function renderLinks(rels) {
+  $("#links-body").innerHTML = !rels.length
+    ? `<div class="card empty">No links yet. They appear once a second document is processed.</div>`
+    : rels.map(r => `<div class="card">
+        <span class="badge ${r.relation}">${r.relation}</span>
+        <span class="muted"> confidence ${Number(r.confidence).toFixed(2)}</span>
+        <div class="pair">${factBlock(r, "a_")}${factBlock(r, "b_")}</div>
+        <div class="why"><b>Reasoning</b>${esc(r.reasoning)}</div></div>`).join("");
 }
 
-async function loadFindings() {
-  const type = document.querySelector('input[name=ft]:checked').value;
-  const p = new URLSearchParams({ type, cross_document: $('#xdoc').checked ? 1 : 0 });
-  const rows = await (await fetch(`/api/findings?${p}`)).json();
-
-  $('#fcount').textContent = rows.length ? `${rows.length} shown` : '';
-  if (!rows.length) {
-    $('#findings').innerHTML = '<div class="empty">No findings yet. Label at least two ' +
-      'documents in the same corpus, then re-adjudicate.</div>';
-    return;
-  }
-  $('#findings').innerHTML = rows.map(f => `
-    <div class="finding">
-      <header>
-        <span class="badge b-${f.type}">${f.type}</span>
-        <span class="metric">${esc(f.metric || f.group_key)}</span>
-        <span class="qual">${esc(f.subject || '')}</span>
-        ${f.cross_document ? '<span class="qual">across documents</span>' : ''}
-        ${f.dimension ? `<span class="qual">by ${esc(f.dimension)}</span>` : ''}
-        <span class="why">${esc(f.reason || '')}</span>
-      </header>
-      <div class="sides">${side(f.a)}${side(f.b)}</div>
-    </div>`).join('');
+function renderFacts(target, facts) {
+  $(target).innerHTML = !facts.length
+    ? `<div class="card empty">Nothing here yet.</div>`
+    : `<div class="card"><table><tr><th>Fact</th><th>Context</th><th>Evidence</th></tr>`
+      + facts.map(f => `<tr>
+          <td><b>${esc(f.subject)}</b><div class="muted">${esc(f.attribute)}</div>
+              <div style="margin-top:4px">${esc(f.value)} ${esc(f.unit)}</div></td>
+          <td>${tags(f.period, f.scope) || '<span class="muted">—</span>'}
+              <div class="muted" style="margin-top:6px">${src(f)}</div></td>
+          <td><div class="quote">“${esc(f.quote)}”</div>
+              ${f.note ? `<div class="muted">${esc(f.note)}</div>` : ""}</td></tr>`).join("")
+      + `</table></div>`;
 }
 
-document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
-  document.querySelectorAll('.tab').forEach(x => x.classList.toggle('on', x === t));
-  const findings = t.dataset.view === 'findings';
-  $('#view-findings').hidden = !findings;
-  $('#view-evidence').hidden = findings;
-  if (findings) loadFindings();
-});
-document.querySelectorAll('input[name=ft]').forEach(r => r.onchange = loadFindings);
-$('#xdoc').onchange = loadFindings;
-$('#readjudicate').onclick = async () => {
-  $('#fcount').textContent = 'adjudicating…';
-  const r = await (await fetch('/api/adjudicate', { method: 'POST' })).json();
-  $('#fcount').textContent = `${r.groups_adjudicated} groups`;
-  await loadFindings();
-};
-
-loadDocs();
-    const d = (await (await fetch('/api/documents')).json()).find(x => x.id === current);
-    $('#lstat').textContent = `${d.labelled} labelled · ${d.facts} facts`;
-    if (d.labelled >= r.pending) { clearInterval(poll); $('#label').disabled = false; }
-    await loadRows();
-  }, 4000);
-  setTimeout(() => { clearInterval(poll); $('#label').disabled = false; }, 600000);
-};
-
-(async () => {
-  const m = await (await fetch('/api/models')).json();
-  $('#phase').textContent = m.available.includes(m.configured)
-    ? `evidence mining + labelling · ${m.configured}`
-    : `${m.configured} not pulled — run: ollama pull ${m.configured}`;
-})();
-
-// --- findings -------------------------------------------------------------
-
-function side(c) {
-  const value = [c.currency, c.value, c.unit].filter(Boolean).join(' ') || '—';
-  const quals = ['period', 'basis', 'vintage', 'scope']
-    .filter(k => c[k]).map(k => `${k}: ${c[k]}`).join(' · ');
-  const page = c.printed_page ? `p.${c.printed_page} (pdf ${c.pdf_page})` : `pdf p.${c.pdf_page}`;
-  return `<div class="side">
-    <div class="num">${esc(value)}</div>
-    <div class="src">${esc(c.filename || c.doc_id)} · ${esc(page)}${
-      quals ? ' · ' + esc(quals) : ''}</div>
-    <div class="q">${esc(c.quote || '')}</div>
-  </div>`;
-}
-
-async function loadFindings() {
-  const type = document.querySelector('input[name=ft]:checked').value;
-  const p = new URLSearchParams({ type, cross_document: $('#xdoc').checked ? 1 : 0 });
-  const rows = await (await fetch(`/api/findings?${p}`)).json();
-
-  $('#fcount').textContent = rows.length ? `${rows.length} shown` : '';
-  if (!rows.length) {
-    $('#findings').innerHTML = '<div class="empty">No findings yet. Label at least two ' +
-      'documents in the same corpus, then re-adjudicate.</div>';
-    return;
-  }
-  $('#findings').innerHTML = rows.map(f => `
-    <div class="finding">
-      <header>
-        <span class="badge b-${f.type}">${f.type}</span>
-        <span class="metric">${esc(f.metric || f.group_key)}</span>
-        <span class="qual">${esc(f.subject || '')}</span>
-        ${f.cross_document ? '<span class="qual">across documents</span>' : ''}
-        ${f.dimension ? `<span class="qual">by ${esc(f.dimension)}</span>` : ''}
-        <span class="why">${esc(f.reason || '')}</span>
-      </header>
-      <div class="sides">${side(f.a)}${side(f.b)}</div>
-    </div>`).join('');
-}
-
-document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
-  document.querySelectorAll('.tab').forEach(x => x.classList.toggle('on', x === t));
-  const findings = t.dataset.view === 'findings';
-  $('#view-findings').hidden = !findings;
-  $('#view-evidence').hidden = findings;
-  if (findings) loadFindings();
-});
-document.querySelectorAll('input[name=ft]').forEach(r => r.onchange = loadFindings);
-$('#xdoc').onchange = loadFindings;
-$('#readjudicate').onclick = async () => {
-  $('#fcount').textContent = 'adjudicating…';
-  const r = await (await fetch('/api/adjudicate', { method: 'POST' })).json();
-  $('#fcount').textContent = `${r.groups_adjudicated} groups`;
-  await loadFindings();
-};
-
-loadDocs();
+refresh();
 </script>
 </body>
 </html>

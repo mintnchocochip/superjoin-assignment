@@ -105,9 +105,7 @@ are not the model's job: quote grounding and candidate pairing.
 
 ## Video Demo
 
-*(to record: upload a PDF, watch facts appear, then walk through the four cases
-in the Links tab — under three minutes.)*
-
+[Demo Video](https://drive.google.com/file/d/109kyp-2EJSO1K0_HMabhfzUD4ytkHQsf/view?usp=sharing)
 ## Approach
 
 ### What counts as a fact
